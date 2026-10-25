@@ -64,9 +64,9 @@ To finish UI validation on the installed version:
 
 Do not mark cross-account resume verified merely because a pointer copy succeeded. Different app versions, account policies, account-scoped environments, pruned transcripts, missing worktrees or app-side import rules can still prevent continuation.
 
-## Differences from upstream
+## Differences from upstream in the initial 0.1.0 release
 
-The Windows upstream chooses newest valid versions, propagates tombstones, quarantines stale records, repairs transcript-only entries/worktree leases, merges some global account settings, and installs hooks/watchers. This Linux implementation deliberately starts with an offline additive core. It has no watcher, hooks, scheduled services, automatic token swapping, newest-wins replacement, tombstone cleanup, fabricated orphan pointers, global settings merge or lease repair. Those features are not claimed complete.
+The Windows upstream chooses newest valid versions, propagates tombstones, quarantines stale records, repairs transcript-only entries/worktree leases, merges some global account settings, and installs hooks/watchers. The initial 0.1.0 release started with an offline additive core. It has no watcher, hooks, scheduled services, automatic token swapping, newest-wins replacement, tombstone cleanup, fabricated orphan pointers, global settings merge or lease repair. Those features are not claimed complete.
 
 ## Follow-up fix: complete transcripts and Desktop forks (0.1.1)
 
@@ -92,3 +92,15 @@ The terminal menu, prompts, errors and results are English. Running without argu
 Process discovery is shared between the write guard and force-quit path. It checks the current UID, exact Claude executable names, and Claude app paths for Electron. It recognizes upgraded executables marked `(deleted)` and excludes this tool and unrelated Electron apps. The force-quit operation uses a fixed process snapshot and checks process start identity before signalling; on supported Linux kernels Go pins the process with a pidfd. TERM is followed by a bounded wait and KILL only for survivors from that snapshot. Newly started processes are handled by the existing guard, not killed automatically.
 
 Tests exercise Retry, Force quit, Cancel, EOF, invalid choices, failures, English menu routing, snapshot TERM/KILL escalation, non-interactive flag validation, classification, current process identity and refusal to signal a changed identity. A signal integration test only starts and terminates its own harmless `/bin/sleep` child; no real user Claude process is stopped by the automated tests. Undo remains compatible with both 0.1.0 and 0.1.1 manifests. Force quitting live Claude can interrupt work and is only performed after explicit selection or an explicit flag.
+
+## Bidirectional metadata and deletion reconciliation (0.3.0)
+
+The additive-only limitation of earlier releases is removed. All existing account/org directories are both sources and destinations by default. The newest valid record is selected by source file modification time, with `lastActivityAt` as a tie-breaker; the original source modification time is preserved on every copy/update. Equally recent differing records remain explicit conflicts. A user-selected `--from` is authoritative for one-way transfers.
+
+Create, update, quarantine and tombstone actions carry a complete write-ahead manifest. Existing bytes and timestamps, planned new bytes and checksums are all stored before any metadata changes. Updates are staged/fsynced and atomically renamed after checking the expected target again. Deletion markers are copied across destinations, and matching stale records are preserved in backup/quarantine before removal from the active list. Undo restores original versions and timestamps, retains applied versions separately, skips unapplied/already-restored actions after interruption, and refuses targets modified by the user. Old 0.1.0, 0.1.1 and 0.2.0 manifests remain supported.
+
+Both old and newly referenced transcript files stay untouched. These accounts share the same projects directory on this machine: messages do not need to be copied between account buckets. Updating the metadata's current/prior transcript IDs brings accounts onto the current conversation. This does not claim cross-machine transcript transfer or merge divergent message histories.
+
+Regression coverage includes A-to-B-to-A round trips, new messages in the shared transcript, configuration changes, advancing transcript IDs without losing previous files, parent pointers advancing while forks retain old history, preserved modification times/idempotence, deletion propagation, marker updates, original/replacement backup retention, undo, partial apply recovery, explicit source resolution, tied conflicts, stale plans and target-owned configuration in chat mode.
+
+These are executable filesystem tests with synthetic records and read-only checks of the actual machine. They do not replace the user's validation of listing and resuming sessions in Claude Desktop under different logins. No automated account login or UI send was performed.

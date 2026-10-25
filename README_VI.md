@@ -2,9 +2,9 @@
 
 [English](README.md) | **Tiếng Việt**
 
-Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ các bản ghi sidebar còn thiếu giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
+Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ hai chiều các bản ghi sidebar giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
 
-**Trạng thái 0.2.0:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
+**Trạng thái 0.3.0:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
 
 ## Hai lựa chọn sao chép
 
@@ -115,17 +115,20 @@ claude-session-sync doctor --data-dir /duong/dan/userData-da-kiem-tra --projects
 
 Các lệnh khác nhận cùng hai option này. Không tự chuyển đổi layout Flatpak, Wine, Windows, macOS, SSH hay WSL.
 
-## Không ghi đè và xử lý xung đột
+## Đồng bộ hai chiều, message và session đã xóa
 
-- Chỉ thêm file còn thiếu vào các thư mục account/org đã có. File đích được xuất bản nguyên vẹn bằng hard link nguyên tử và từ chối tên đã tồn tại.
-- Bản ghi cùng tên nhưng khác nội dung được báo **conflict**, không chọn bản mới nhất theo thời gian. Một transcript được nhiều ID nội bộ trỏ tới cũng bị chặn để tránh nhân đôi.
-- Khi tiếp tục làm việc ở account B, transcript chung vẫn cập nhật; metadata riêng của account A có thể cũ. Bản 0.2.0 **không tự hòa giải metadata bị lệch**. Phải kiểm tra conflict trước khi chuyển lại. Đây không phải đồng bộ liên tục toàn trạng thái runtime.
-- Dấu `deleted_<id>` ở bất kỳ bucket nào ngăn thêm lại session có ID/alias tương ứng (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, ID tên file).
-- Không dọn/di chuyển các bản sao cũ đã tồn tại của session có tombstone, không phát tán tombstone, không sửa worktree registry.
-- Đọc toàn bộ transcript theo luồng, kể cả dòng lớn và phần lịch sử kế thừa. Session cần có đúng ID và nguồn Desktop. Nhánh chưa có lượt Desktop riêng chỉ được chấp nhận khi metadata trỏ đúng session cha đã được xác minh là Desktop, transcript chứa lịch sử Desktop của cha và cả ID của nhánh mới. Chỉ có lịch sử kế thừa không liên quan hoặc dấu nguồn CLI thì không đủ. Transcript thiếu/chưa rõ nguồn hoặc có `.desktop-released.json` sẽ bị bỏ qua; JSON bị lỗi hay lỗi đọc file sẽ dừng lập kế hoạch và báo rõ nguyên nhân.
-- Transcript Desktop không còn pointer được liệt kê để điều tra; công cụ **không bịa ID mới** hoặc tự dựng metadata/worktree lease.
+Mặc định, **mọi thư mục account/org đã có đều vừa là nguồn vừa là đích**. App thêm session còn thiếu và cập nhật bản ghi đã có khi nơi khác có phiên bản mới hơn. Chạy sync trước khi đổi account để account tiếp theo nhận đúng transcript và trạng thái mới nhất.
 
-Các giới hạn trên ưu tiên giữ dữ liệu gốc. Chạy `plan` trước mỗi lần áp dụng.
+- Chọn bản hợp lệ mới nhất theo thời gian sửa file; dùng `lastActivityAt` để phân định khi bằng thời gian sửa. Giữ nguyên thời gian nguồn khi chép để tránh cập nhật qua lại mãi. Nếu hai bản vẫn khác nhau nhưng cùng độ mới, app giữ nguyên và báo xung đột; dùng `--from` để chọn nguồn rõ ràng.
+- `--from ACCOUNT/ORG --to ACCOUNT/ORG` giới hạn thành chuyển một chiều từ nguồn đã chọn. Nguồn này có thể thay thế cả bản đích mới hơn; hãy xem plan trước. Mỗi bản đích bị thay thế đều được backup.
+- `--copy all` giữ nguyên bản ghi mới nhất, toàn bộ cấu hình và ID transcript hiện tại/trước đó. Bản ghi đã có chỉ được thay thế nguyên tử sau khi backup bền vững cả dữ liệu trước và sau thay đổi.
+- `--copy chat` cập nhật lịch sử và liên kết transcript/worktree, giữ cấu hình chạy cùng quyền riêng của đích đã tồn tại. Đích mới dùng bản ghi tối thiểu và quyền mặc định.
+- File message trong thư mục projects dùng chung **không bị ghi đè, viết lại hay gộp**. Các account đọc cùng transcript trên máy. Cập nhật metadata giúp account trỏ đúng transcript mới nhất, kể cả khi CLI session ID thay đổi. Toàn bộ file transcript cũ vẫn được giữ.
+- Truyền dấu xóa sang các thư mục đích. Bản ghi cũ khớp dấu xóa được đưa khỏi danh sách hoạt động, nhưng toàn bộ byte vẫn còn trong backup/quarantine. So dấu xóa với ID tên file, `cliSessionId`, `unarchivedCliSessionId` và `priorCliSessionIds` để tránh session xuất hiện lại.
+- Nhiều ID nội bộ khác nhau trỏ cùng transcript vẫn được báo để xử lý, không tự gộp. Không phát tán bản ghi hỏng. Transcript cần được đọc toàn bộ và xác minh nguồn Desktop hoặc quan hệ cha của nhánh; thiếu/chưa rõ nguồn hoặc có `.desktop-released.json` thì bỏ qua. Lỗi đọc hay JSON hỏng được báo rõ và dừng lập kế hoạch.
+- Transcript không còn pointer được liệt kê để điều tra; không tự bịa ID, dựng worktree lease hay sửa registry worktree.
+
+Sau khi làm việc ở account khác, chạy sync lại trước khi đổi về. Đây là thao tác offline, chưa phải watcher chạy cùng Claude. Menu có Force quit / Retry / Cancel. Việc gửi tiếp trong UI dưới account khác vẫn cần kiểm tra trên bản app đang cài.
 
 ## Backup và hoàn tác
 
@@ -137,14 +140,14 @@ Trước khi thêm bất kỳ file nào, công cụ ghi manifest chứa toàn b�
 
 Thư mục `0700`, file `0600`. `--copy all` lưu cả secrets nằm trong bản ghi vào backup. Không đưa backup/đầu ra plan đầy đủ lên GitHub. Dùng `--summary` nếu chỉ cần danh sách thao tác; không có option này, JSON có nội dung metadata.
 
-Backup là bản sao của **các bản ghi sẽ được thêm**, không phải backup toàn bộ transcript/profile. Transcript và bản ghi gốc không bị sửa. Manifest được ghi bền vững trước thao tác đầu tiên; khi lỗi giữa chừng, dùng backup ID trong tên thư mục để hoàn tác.
+Backup chứa **cả byte gốc và byte thay thế cho mọi thay đổi dự kiến**, không phải toàn bộ transcript/profile. Manifest được ghi bền vững trước thay đổi đầu tiên; metadata sau đó có thể được thay thế nguyên tử hoặc đưa vào quarantine, còn transcript không bị sửa. Khi lỗi giữa chừng, dùng backup ID để hoàn tác phần đã thực hiện, giữ nguyên phần chưa chạy.
 
 ```bash
 claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo đưa bản ghi được thêm vào quarantine trong cùng backup, không hủy nội dung. Nếu app đã sửa bản ghi, undo từ chối để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.2.0 vẫn hỗ trợ hoàn tác backup của bản 0.1.0 và 0.1.1.
+Undo phục hồi phiên bản trước, khôi phục bản ghi đã được sync đưa vào quarantine và đảo ngược các dấu xóa/bản ghi mới được thêm. Phiên bản đã áp dụng vẫn còn trong thư mục `undone` của backup. Nếu app đã sửa bản ghi sau sync, undo từ chối ghi đè để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.3.0 vẫn hỗ trợ hoàn tác backup của bản 0.1.0, 0.1.1 và 0.2.0.
 
 ## Build và test
 

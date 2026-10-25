@@ -2,9 +2,9 @@
 
 **English** | [Tiếng Việt](README_VI.md)
 
-A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It copies missing sidebar records between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
+A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It synchronizes sidebar records in both directions between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 
-**Version 0.2.0 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
+**Version 0.3.0 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
 
 ## Copy modes
 
@@ -115,17 +115,20 @@ claude-session-sync doctor --data-dir /verified/path/to/userData --projects-dir 
 
 Other commands accept the same two options. Flatpak, Wine, Windows, macOS, SSH and WSL layouts are not converted automatically.
 
-## Existing records and conflicts
+## Bidirectional synchronization, messages and deletions
 
-- Only missing files are added to existing account/org directories. Each complete destination file is published atomically using a hard link, refusing an existing destination name.
-- Records with the same filename but different contents are reported as a **conflict**; the tool does not select the newest version by timestamp. Multiple internal IDs pointing to the same transcript are also blocked to prevent duplication.
-- Continuing work under account B updates the shared transcript, while account A's metadata may become stale. Version 0.2.0 **does not reconcile diverged metadata automatically**. Check conflicts before switching back. This is not continuous synchronization of all runtime state.
-- A `deleted_<id>` marker in any bucket prevents adding a session with that ID or alias (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, or the filename ID).
-- Existing stale copies of tombstoned sessions are not cleaned up or moved. Tombstones are not propagated, and the worktree registry is not modified.
-- The complete transcript is streamed, including large lines and inherited history. A session needs a matching ID and Desktop provenance. A fork without its own Desktop turn is accepted only when its metadata points to a proven Desktop parent, its transcript contains that parent's Desktop identity, and it also contains the child's own ID. Unrelated inherited history or a CLI entrypoint is insufficient. Missing/unproven transcripts and `.desktop-released.json` sidecars cause the session to be skipped; malformed transcripts or read errors stop planning with an explicit error.
-- Desktop transcripts without a pointer are listed for investigation; the tool **does not invent IDs** or reconstruct metadata/worktree leases automatically.
+The default sync considers **every existing account/org bucket as both a source and a destination**. It adds missing sessions and updates existing session records when another bucket has a newer version. Use it before switching accounts so the next account receives the latest transcript pointer and workflow state.
 
-These limits preserve the original data. Run `plan` before every apply operation.
+- The newest valid record is selected by filesystem modification time; `lastActivityAt` breaks timestamp ties. The winner's modification time is preserved on copies to prevent repeated back-and-forth updates. When equally recent records still differ, they are retained and reported as a conflict; choose an explicit source with `--from` to resolve it.
+- `--from ACCOUNT/ORG --to ACCOUNT/ORG` limits the operation to a one-way transfer from the chosen source. That selection can replace a newer target version, so review the plan. Every replaced target version is backed up.
+- `--copy all` copies the complete newest session record without redaction, including configuration and current/prior transcript IDs. Existing records are atomically replaced only after all previous bytes and planned new bytes have been durably backed up.
+- `--copy chat` updates history and transcript/worktree identity while keeping each existing target's own runtime configuration and permissions. New target records use the minimal chat projection and default permissions.
+- Message files under the shared local projects directory are **never overwritten, rewritten or merged**. Accounts use the same on-disk transcripts. Updating the sidebar record makes an account point to the current transcript, including after its CLI ID advances. All previous transcript files remain intact.
+- Deletion markers are propagated to destination buckets. Every matching stale session record is moved out of the active session list with its complete bytes retained in backup/quarantine. Markers match filename IDs, `cliSessionId`, `unarchivedCliSessionId` and `priorCliSessionIds`, so deleted sessions do not reappear.
+- Multiple distinct internal session IDs pointing to the same transcript are still reported rather than silently merged. Corrupt records are not spread. A complete transcript scan or verified Desktop parent lineage is required; missing/unproven transcripts and `.desktop-released.json` sidecars are skipped. Read errors and malformed transcripts stop planning explicitly.
+- Desktop transcripts without a sidebar pointer are listed for investigation. The tool does not invent IDs, rebuild worktree leases or modify the worktree registry.
+
+Run sync again before switching back after working in another account. This is an offline operation, not a watcher while Claude is running. The terminal menu offers Force quit / Retry / Cancel. Cross-account continuation in the Desktop UI remains to be checked on the installed app version.
 
 ## Backup and undo
 
@@ -137,14 +140,14 @@ Before adding any file, the tool writes a manifest containing the complete selec
 
 Directories use mode `0700`, and files use `0600`. With `--copy all`, the backup includes secrets embedded in the record. Do not upload backups or full plan output to GitHub. Use `--summary` when you only need the operation list; without it, JSON output contains metadata payloads.
 
-The backup contains **the records that will be added**, not all transcripts or the entire profile. Original records and transcripts are not modified. The manifest is persisted before the first addition; if an operation fails partway through, use the backup ID from the directory name to undo it.
+The write-ahead backup contains **both original bytes and replacement bytes for all planned changes**, not all transcripts or the entire profile. It is persisted before the first change. Existing metadata can then be replaced atomically or quarantined; transcript files remain untouched. If an operation fails partway through, use the backup ID to undo completed changes while leaving unapplied actions alone.
 
 ```bash
 claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo moves added records into quarantine within the same backup, preserving their contents. If the app has modified a record, undo refuses to remove it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.2.0 also supports undoing 0.1.0 and 0.1.1 backups.
+Undo restores previous record versions, restores records quarantined by sync, and reverses propagated markers/additions. Applied versions are retained in the backup's `undone` quarantine. If the app has modified a target since sync, undo refuses to overwrite it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.3.0 also supports undoing 0.1.0, 0.1.1 and 0.2.0 backups.
 
 ## Build and test
 

@@ -1,6 +1,6 @@
 //go:build linux
 
-// An offline, additive synchronizer for Claude Desktop Code metadata.
+// An offline, bidirectional synchronizer for Claude Desktop Code metadata.
 package main
 
 import (
@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 var guard = processGuard
 
@@ -33,6 +33,8 @@ var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 var allowed = strings.Fields("sessionId cliSessionId unarchivedCliSessionId priorCliSessionIds forkedFromSessionId cwd originCwd worktreePath worktreeName folderWorktrees worktreeLazy worktreePinned sourceBranch branch gitAnchors gitAnchorsFolderRealpath gitAnchorsLookupOnly createdAt lastActivityAt lastFocusedAt title titleSource isArchived model effort")
 
 type Record struct {
+	Raw                []byte
+	ModifiedNS         int64
 	Parent             string
 	Excluded           []string
 	Path, Bucket, Name string
@@ -41,12 +43,23 @@ type Record struct {
 	Payload            []byte
 }
 type Action struct {
-	Source  string          `json:"source"`
-	Target  string          `json:"target"`
-	SHA256  string          `json:"sha256"`
-	Payload json.RawMessage `json:"payload"`
+	Kind             string          `json:"kind"`
+	Before           []byte          `json:"previous_bytes,omitempty"`
+	BeforeSHA256     string          `json:"previous_sha256,omitempty"`
+	ModifiedNS       int64           `json:"modified_ns"`
+	BeforeModifiedNS int64           `json:"previous_modified_ns,omitempty"`
+	Source           string          `json:"source"`
+	Target           string          `json:"target"`
+	SHA256           string          `json:"sha256"`
+	Payload          json.RawMessage `json:"payload"`
 }
 type Report struct {
+	SourceBucket       string   `json:"source_bucket,omitempty"`
+	TargetBucket       string   `json:"target_bucket,omitempty"`
+	Added              int      `json:"added"`
+	Updated            int      `json:"updated"`
+	Quarantined        int      `json:"quarantined"`
+	Tombstones         int      `json:"tombstones"`
 	LineageVerified    []string `json:"lineage_verified_sessions"`
 	FullRecord         bool     `json:"full_record"`
 	CopyMode           string   `json:"copy_mode"`
@@ -62,10 +75,15 @@ type Report struct {
 	MissingTranscripts int      `json:"missing_transcripts"`
 }
 type StoredAction struct {
-	Source  string `json:"source"`
-	Target  string `json:"target"`
-	SHA256  string `json:"sha256"`
-	Payload []byte `json:"payload_base64"`
+	Kind             string `json:"kind,omitempty"`
+	Before           []byte `json:"previous_bytes,omitempty"`
+	BeforeSHA256     string `json:"previous_sha256,omitempty"`
+	ModifiedNS       int64  `json:"modified_ns,omitempty"`
+	BeforeModifiedNS int64  `json:"previous_modified_ns,omitempty"`
+	Source           string `json:"source"`
+	Target           string `json:"target"`
+	SHA256           string `json:"sha256"`
+	Payload          []byte `json:"payload_base64"`
 }
 type Journal struct {
 	Version string         `json:"version"`
@@ -222,7 +240,7 @@ func scrub(v any, path string) (any, []string) {
 }
 
 func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
-	r := Record{Path: path, Bucket: bucket, Name: filepath.Base(path)}
+	r := Record{Path: path, Bucket: bucket, Name: filepath.Base(path), Raw: append([]byte(nil), b...)}
 	var d map[string]any
 	if e := decode(b, &d); e != nil {
 		return r, e
@@ -485,16 +503,12 @@ func transcriptProof(rec Record, index map[string]Transcript, parents map[string
 	if len(candidates) == 0 {
 		return ""
 	}
-	parentSID := transcriptID(candidates[0])
-	parentParent := candidates[0].Parent
-	for _, parent := range candidates {
-		if transcriptID(parent) != parentSID || parent.Parent != parentParent {
-			return ""
-		}
+	parent, chooseErr := newestRecord(candidates, "")
+	if chooseErr != nil {
+		return ""
 	}
 	visiting[rec.Name] = true
 	defer delete(visiting, rec.Name)
-	parent := candidates[0]
 	if transcriptProof(parent, index, parents, visiting) == "" {
 		return ""
 	}
@@ -507,7 +521,7 @@ func transcriptProof(rec Record, index map[string]Transcript, parents map[string
 }
 
 func scan(data, projects, source, target, mode string) (Report, error) {
-	rep := Report{Version: version, DataDir: data, ProjectsDir: projects, CopyMode: mode, FullRecord: mode == "all", Excluded: []string{}, Actions: []Action{}, Warnings: []string{}, Orphans: []string{}, LineageVerified: []string{}}
+	rep := Report{Version: version, DataDir: data, ProjectsDir: projects, CopyMode: mode, SourceBucket: source, TargetBucket: target, FullRecord: mode == "all", Excluded: []string{}, Actions: []Action{}, Warnings: []string{}, Orphans: []string{}, LineageVerified: []string{}}
 	r, e := realRoot(data)
 	if e != nil {
 		return rep, e
@@ -519,6 +533,7 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 	}
 	records := []Record{}
 	tombs := map[string]bool{}
+	markers := map[string][]fileVersion{}
 	blocked := map[string]bool{}
 	names := map[string]bool{}
 	for _, a := range accounts {
@@ -561,7 +576,15 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 					if !uuid.MatchString(id) {
 						return rep, fmt.Errorf("unrecognized tombstone: %s", path)
 					}
+					if !validTombstone(b) {
+						return rep, fmt.Errorf("invalid deletion marker timestamp: %s", path)
+					}
 					tombs[id] = true
+					info, e := r.Lstat(path)
+					if e != nil {
+						return rep, e
+					}
+					markers[name] = append(markers[name], fileVersion{Path: path, Bucket: bucket, Data: b, ModifiedNS: info.ModTime().UnixNano()})
 					continue
 				}
 				if !strings.HasSuffix(name, ".json") {
@@ -577,6 +600,11 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 				for _, field := range rec.Excluded {
 					rep.Excluded = append(rep.Excluded, path+":"+field)
 				}
+				info, e := r.Lstat(path)
+				if e != nil {
+					return rep, e
+				}
+				rec.ModifiedNS = info.ModTime().UnixNano()
 				records = append(records, rec)
 			}
 		}
@@ -627,13 +655,8 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 		if blocked[name] {
 			continue
 		}
-		first := group[0]
-		conflict := false
 		deleted := false
 		for _, rec := range group {
-			if !bytes.Equal(first.Payload, rec.Payload) {
-				conflict = true
-			}
 			for _, id := range rec.IDs {
 				if tombs[id] {
 					deleted = true
@@ -641,25 +664,21 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			}
 		}
 		if deleted {
-			rep.Warnings = append(rep.Warnings, "Tombstoned; no copy or automatic cleanup: "+name)
-			continue
-		}
-		if conflict {
-			rep.Warnings = append(rep.Warnings, "Conflicting versions; no winner selected: "+name)
-			continue
-		}
-		if source != "" {
-			found := false
 			for _, rec := range group {
-				if rec.Bucket == source {
-					first = rec
-					found = true
-					break
+				if target != "" && rec.Bucket != target {
+					continue
 				}
+				rep.Actions = append(rep.Actions, Action{Kind: "quarantine", Source: rec.Path, Target: rec.Path, Before: rec.Raw, BeforeSHA256: digest(rec.Raw), BeforeModifiedNS: rec.ModifiedNS})
 			}
-			if !found {
-				continue
-			}
+			continue
+		}
+		first, chooseErr := newestRecord(group, source)
+		if chooseErr != nil {
+			rep.Warnings = append(rep.Warnings, chooseErr.Error()+": "+name)
+			continue
+		}
+		if first.Name == "" {
+			continue
 		}
 		// Alias collision under a different internal Desktop ID must never duplicate a conversation.
 		collision := false
@@ -709,10 +728,60 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 				continue
 			}
 			dst := filepath.Join("claude-code-sessions", bucket, name)
-			if names[dst] {
+			var old *Record
+			for i := range group {
+				if group[i].Bucket == bucket {
+					old = &group[i]
+					break
+				}
+			}
+			desired := first.Payload
+			if mode == "chat" && old != nil {
+				if old.Path == first.Path {
+					continue
+				}
+				desired = chatUpdate(first, *old)
+			}
+			if old != nil && bytes.Equal(old.Raw, desired) {
 				continue
 			}
-			rep.Actions = append(rep.Actions, Action{Source: first.Path, Target: dst, SHA256: digest(first.Payload), Payload: first.Payload})
+			action := Action{Kind: "create", Source: first.Path, Target: dst, SHA256: digest(desired), Payload: desired, ModifiedNS: first.ModifiedNS}
+			if old != nil {
+				action.Kind = "update"
+				action.Before = old.Raw
+				action.BeforeSHA256 = digest(old.Raw)
+				action.BeforeModifiedNS = old.ModifiedNS
+			}
+			rep.Actions = append(rep.Actions, action)
+		}
+	}
+	appendTombstoneActions(&rep, markers, target)
+	sort.SliceStable(rep.Actions, func(i, j int) bool {
+		rank := func(k string) int {
+			if k == "tombstone" {
+				return 0
+			}
+			if k == "quarantine" {
+				return 1
+			}
+			return 2
+		}
+		a, b := rank(rep.Actions[i].Kind), rank(rep.Actions[j].Kind)
+		if a != b {
+			return a < b
+		}
+		return rep.Actions[i].Target < rep.Actions[j].Target
+	})
+	for _, a := range rep.Actions {
+		switch a.Kind {
+		case "create":
+			rep.Added++
+		case "update":
+			rep.Updated++
+		case "quarantine":
+			rep.Quarantined++
+		case "tombstone":
+			rep.Tombstones++
 		}
 	}
 	sort.Strings(rep.Buckets)
@@ -800,172 +869,6 @@ func lockRoot(r *os.Root) (*os.File, error) {
 	}
 	return f, nil
 }
-func apply(rep Report) (string, error) {
-	if e := guard(); e != nil {
-		return "", e
-	}
-	r, e := realRoot(rep.DataDir)
-	if e != nil {
-		return "", e
-	}
-	defer r.Close()
-	lk, e := lockRoot(r)
-	if e != nil {
-		return "", e
-	}
-	defer lk.Close()
-	// Refuse any change since the plan, including new deletion markers.
-	fresh, e := scan(rep.DataDir, rep.ProjectsDir, "", "", rep.CopyMode)
-	if e != nil {
-		return "", e
-	}
-	valid := map[string]Action{}
-	for _, a := range fresh.Actions {
-		valid[a.Target] = a
-	}
-	for _, a := range rep.Actions {
-		v, ok := valid[a.Target]
-		if !ok || v.SHA256 != a.SHA256 {
-			return "", errors.New("plan became stale; run again")
-		}
-	}
-	if len(rep.Actions) == 0 {
-		return "", nil
-	}
-	if e = safe(r, backupDir, true); e != nil {
-		return "", e
-	}
-	if e = r.MkdirAll(backupDir, 0700); e != nil {
-		return "", e
-	}
-	info, e := r.Stat(backupDir)
-	if e != nil {
-		return "", e
-	}
-	if info.Mode().Perm() != 0700 {
-		return "", errors.New("backup directory must have mode 0700")
-	}
-	id := time.Now().UTC().Format("20060102T150405.000000000Z")
-	dir := filepath.Join(backupDir, id)
-	if e = r.Mkdir(dir, 0700); e != nil {
-		return "", e
-	}
-	stored := []StoredAction{}
-	for _, a := range rep.Actions {
-		stored = append(stored, StoredAction{Source: a.Source, Target: a.Target, SHA256: a.SHA256, Payload: []byte(a.Payload)})
-	}
-	j := Journal{Version: version, Created: time.Now().UTC().Format(time.RFC3339), Actions: stored}
-	b, _ := json.MarshalIndent(j, "", "  ")
-	if e = add(r, filepath.Join(dir, "manifest.json"), b); e != nil {
-		return id, e
-	}
-	if e = durableDir(r, backupDir); e != nil {
-		return id, e
-	}
-	if e = durableDir(r, "."); e != nil {
-		return id, e
-	}
-	// Write-ahead manifest holds every sanitized payload before the first app write.
-	for _, a := range rep.Actions {
-		if e = guard(); e != nil {
-			return id, e
-		}
-		if e = add(r, a.Target, a.Payload); e != nil {
-			return id, fmt.Errorf("partial operation; use undo %s: %w", id, e)
-		}
-	}
-	return id, nil
-}
-func undo(data, id string, apply bool) ([]string, error) {
-	if !regexp.MustCompile(`^\d{8}T\d{6}\.\d{9}Z$`).MatchString(id) {
-		return nil, errors.New("invalid backup ID")
-	}
-	r, e := realRoot(data)
-	if e != nil {
-		return nil, e
-	}
-	defer r.Close()
-	var lk *os.File
-	if apply {
-		if e = guard(); e != nil {
-			return nil, e
-		}
-		lk, e = lockRoot(r)
-		if e != nil {
-			return nil, e
-		}
-		defer lk.Close()
-	}
-	dir := filepath.Join(backupDir, id)
-	b, e := read(r, filepath.Join(dir, "manifest.json"), 100*1024*1024)
-	if e != nil {
-		return nil, e
-	}
-	var j Journal
-	if e = decode(b, &j); e != nil {
-		return nil, e
-	}
-	if j.Version != "0.1.0" && j.Version != "0.1.1" && j.Version != version {
-		return nil, errors.New("unsupported manifest version")
-	}
-	moves := []string{}
-	expected := map[string]string{}
-	for _, a := range j.Actions {
-		parts := strings.Split(a.Target, "/")
-		if len(parts) != 4 || parts[0] != "claude-code-sessions" || !uuid.MatchString(parts[1]) || !uuid.MatchString(parts[2]) {
-			return nil, errors.New("invalid manifest target")
-		}
-		if _, e = parseRecord(a.Target, filepath.Join(parts[1], parts[2]), a.Payload, "all"); e != nil {
-			return nil, e
-		}
-		if digest(a.Payload) != a.SHA256 {
-			return nil, errors.New("invalid manifest checksum")
-		}
-		current, e := read(r, a.Target, 10*1024*1024)
-		if errors.Is(e, fs.ErrNotExist) {
-			continue
-		}
-		if e != nil {
-			return nil, e
-		}
-		if digest(current) != a.SHA256 {
-			return nil, fmt.Errorf("modified record retained; cannot undo %s", a.Target)
-		}
-		moves = append(moves, a.Target)
-		expected[a.Target] = a.SHA256
-	}
-	if !apply {
-		return moves, nil
-	}
-	// Preflight all records before mutation. Copies remain in quarantine and manifest.
-	for _, path := range moves {
-		if e = guard(); e != nil {
-			return moves, e
-		}
-		b, e := read(r, path, 10*1024*1024)
-		if e != nil {
-			return moves, e
-		}
-		if digest(b) != expected[path] {
-			return moves, fmt.Errorf("record changed during undo: %s", path)
-		}
-		h := sha256.Sum256([]byte(path))
-		q := filepath.Join(dir, fmt.Sprintf("quarantine-%x.json", h[:8]))
-		if e = add(r, q, b); e != nil {
-			prior, e2 := read(r, q, 10*1024*1024)
-			if e2 != nil || digest(prior) != expected[path] {
-				return moves, e
-			}
-		}
-		if e = r.Remove(path); e != nil {
-			return moves, e
-		}
-		if e = durableDir(r, filepath.Dir(path)); e != nil {
-			return moves, e
-		}
-	}
-	return moves, nil
-}
 func run(args []string) error {
 	if len(args) == 0 && terminalInput() {
 		return interactiveMenu(consoleInput, os.Stdout, run)
@@ -990,7 +893,7 @@ func run(args []string) error {
 	projects := f.String("projects-dir", "", "existing transcript projects root")
 	source := f.String("from", "", "source account UUID/org UUID")
 	target := f.String("to", "", "target account UUID/org UUID; omit for every existing bucket")
-	write := f.Bool("apply", false, "apply reviewed additions or undo")
+	write := f.Bool("apply", false, "apply reviewed synchronization changes or undo")
 	dry := f.Bool("dry-run", false, "explicit dry-run (the default)")
 	offline := f.Bool("offline", false, "confirm Desktop and all Claude workers stay stopped throughout")
 	backup := f.String("backup", "", "backup ID for undo")
@@ -1042,7 +945,7 @@ func run(args []string) error {
 			return e
 		}
 		if *interactive {
-			fmt.Fprintf(os.Stdout, "Undo complete. Records moved to quarantine: %d\n", len(m))
+			fmt.Fprintf(os.Stdout, "Undo complete. Restored/reverted paths: %d\n", len(m))
 			return nil
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"apply": *write, "quarantine": m})
@@ -1077,11 +980,11 @@ func run(args []string) error {
 		}
 	}
 	if *interactive {
-		label := "Dry run complete. Planned additions"
+		label := "Dry run complete"
 		if *write {
-			label = "Synchronization complete. Added records"
+			label = "Synchronization complete"
 		}
-		fmt.Fprintf(os.Stdout, "%s: %d. Session records: %d. Skipped/unproven transcripts: %d.\n", label, len(rep.Actions), rep.Records, rep.MissingTranscripts)
+		fmt.Fprintf(os.Stdout, "%s. Added: %d. Updated: %d. Quarantined: %d. Deletion markers: %d. Session records: %d. Skipped/unproven: %d.\n", label, rep.Added, rep.Updated, rep.Quarantined, rep.Tombstones, rep.Records, rep.MissingTranscripts)
 		for _, w := range rep.Warnings {
 			fmt.Fprintln(os.Stdout, "Warning:", w)
 		}
@@ -1090,6 +993,7 @@ func run(args []string) error {
 	if *summary || cmd == "doctor" {
 		for i := range rep.Actions {
 			rep.Actions[i].Payload = nil
+			rep.Actions[i].Before = nil
 		}
 	}
 	enc := json.NewEncoder(os.Stdout)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 const accountA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -148,7 +149,7 @@ func TestApplyIdempotentBackupUndo(t *testing.T) {
 	if len(plan(t, f, "all").Actions) != 1 {
 		t.Fatal("undo failed")
 	}
-	q, e := filepath.Glob(filepath.Join(f.data, backupDir, id, "quarantine-*.json"))
+	q, e := filepath.Glob(filepath.Join(f.data, backupDir, id, "undone", "quarantine-*.json"))
 	if e != nil || len(q) != 1 {
 		t.Fatal("undo lost added record")
 	}
@@ -178,8 +179,13 @@ func TestTombstoneAliases(t *testing.T) {
 			f := setup(t)
 			put(t, filepath.Join(f.data, "claude-code-sessions", f.b, "deleted_"+id), []byte("123"))
 			r := plan(t, f, "all")
-			if len(r.Actions) != 0 {
-				t.Fatal("resurrected deleted session")
+			for _, a := range r.Actions {
+				if a.Kind == "create" || a.Kind == "update" {
+					t.Fatal("resurrected deleted session")
+				}
+			}
+			if r.Quarantined != 1 || r.Tombstones != 1 {
+				t.Fatal("deletion not synchronized")
 			}
 		})
 	}
@@ -190,7 +196,8 @@ func TestUnarchivedAliasTombstone(t *testing.T) {
 	d["unarchivedCliSessionId"] = prior
 	save(t, f.record, d)
 	put(t, filepath.Join(f.data, "claude-code-sessions", f.b, "deleted_"+prior), []byte("123"))
-	if len(plan(t, f, "all").Actions) != 0 {
+	r := plan(t, f, "all")
+	if r.Quarantined != 1 || r.Tombstones != 1 {
 		t.Fatal("unarchived tombstone ignored")
 	}
 }
@@ -201,12 +208,15 @@ func TestInvalidTombstoneFailsClosed(t *testing.T) {
 		t.Fatal("unrecognized deletion marker ignored")
 	}
 }
-func TestConflictNoOverwrite(t *testing.T) {
+func TestTiedConflictNoOverwrite(t *testing.T) {
 	f := setup(t)
 	dst := filepath.Join(f.data, "claude-code-sessions", f.b, filepath.Base(f.record))
 	d := object(t, f.record)
 	d["title"] = "other account edits"
 	save(t, dst, d)
+	stamp := time.Unix(100, 0)
+	os.Chtimes(f.record, stamp, stamp)
+	os.Chtimes(dst, stamp, stamp)
 	r := plan(t, f, "all")
 	if len(r.Actions) != 0 || len(r.Warnings) == 0 {
 		t.Fatal("conflict not reported")
@@ -566,7 +576,7 @@ func TestFIFOTranscriptRefused(t *testing.T) {
 }
 func TestUndoPreviousVersionBackup(t *testing.T) {
 	noProcesses(t)
-	for _, priorVersion := range []string{"0.1.0", "0.1.1"} {
+	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0"} {
 		t.Run(priorVersion, func(t *testing.T) {
 			f := setup(t)
 			id, e := apply(plan(t, f, "all"))

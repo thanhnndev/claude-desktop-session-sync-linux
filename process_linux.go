@@ -58,6 +58,14 @@ func isClaudeExecutable(exe string, argv []byte) bool {
 	}
 	return false
 }
+func ignorableInspectionError(err error, comm string) bool {
+	if !errors.Is(err, fs.ErrPermission) {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(comm))
+	return name != "" && !strings.Contains(name, "claude") && !strings.Contains(name, "electron")
+}
+
 func listClaudeProcesses() ([]claudeProcess, error) {
 	entries, e := os.ReadDir("/proc")
 	if e != nil {
@@ -83,6 +91,10 @@ func listClaudeProcesses() ([]claudeProcess, error) {
 			continue
 		}
 		if e != nil {
+			comm, commErr := os.ReadFile(filepath.Join(base, "comm"))
+			if commErr == nil && ignorableInspectionError(e, string(comm)) {
+				continue
+			}
 			return nil, fmt.Errorf("cannot inspect process %d: %w", pid, e)
 		}
 		var argv []byte

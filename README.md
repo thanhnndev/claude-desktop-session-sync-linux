@@ -4,7 +4,7 @@
 
 A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It synchronizes sidebar records in both directions between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 
-**Version 0.3.0 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
+**Version 0.3.1 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
 
 ## Copy modes
 
@@ -147,7 +147,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo restores previous record versions, restores records quarantined by sync, and reverses propagated markers/additions. Applied versions are retained in the backup's `undone` quarantine. If the app has modified a target since sync, undo refuses to overwrite it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.3.0 also supports undoing 0.1.0, 0.1.1 and 0.2.0 backups.
+Undo restores previous record versions, restores records quarantined by sync, and reverses propagated markers/additions. Applied versions are retained in the backup's `undone` quarantine. If the app has modified a target since sync, undo refuses to overwrite it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.3.1 also supports undoing 0.1.0, 0.1.1, 0.2.0 and 0.3.0 backups.
 
 ## Build and test
 

@@ -104,3 +104,9 @@ Both old and newly referenced transcript files stay untouched. These accounts sh
 Regression coverage includes A-to-B-to-A round trips, new messages in the shared transcript, configuration changes, advancing transcript IDs without losing previous files, parent pointers advancing while forks retain old history, preserved modification times/idempotence, deletion propagation, marker updates, original/replacement backup retention, undo, partial apply recovery, explicit source resolution, tied conflicts, stale plans and target-owned configuration in chat mode.
 
 These are executable filesystem tests with synthetic records and read-only checks of the actual machine. They do not replace the user's validation of listing and resuming sessions in Claude Desktop under different logins. No automated account login or UI send was performed.
+
+## Protected unrelated processes and first live apply (0.3.1)
+
+The first real apply was initially blocked because the user systemd process denied `/proc/<pid>/exe` inspection. The guard now checks an accessible process name when executable inspection returns a permission error. Protected unrelated processes such as systemd do not block synchronization; processes named Claude/Electron, unknown identities and unexpected errors still fail closed. No unrelated process is signalled. Regression tests cover both categories.
+
+After that fix, an explicitly requested force-quit/apply completed on the real CachyOS dataset: 89 source records, 267 additions, zero warnings/unproven transcripts. All four account/org buckets contained 89 records. Every added file was compared byte-for-byte with its write-ahead backup payload. The backup manifest is mode 0600. No transcripts were rewritten. Claude Desktop was then launched for the user to validate account switching and continuation; no automated UI resume/send is claimed. Undo of 0.3.0 backups remains supported in 0.3.1.

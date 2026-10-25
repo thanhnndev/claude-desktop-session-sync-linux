@@ -198,3 +198,19 @@ func TestSignalOnlyOwnedTestProcess(t *testing.T) {
 		t.Fatal("expected TERM on test child")
 	}
 }
+
+func TestProtectedUnrelatedProcessDoesNotBlockSync(t *testing.T) {
+	for _, name := range []string{"systemd\n", "gnome-keyring-d\n", "dbus-broker\n"} {
+		if !ignorableInspectionError(os.ErrPermission, name) {
+			t.Fatal("unrelated protected service blocked sync", name)
+		}
+	}
+	for _, name := range []string{"claude\n", "claude-desktop\n", "electron\n", ""} {
+		if ignorableInspectionError(os.ErrPermission, name) {
+			t.Fatal("uninspectable Claude process was ignored", name)
+		}
+	}
+	if ignorableInspectionError(errors.New("unexpected failure"), "systemd") {
+		t.Fatal("unexpected inspection failure ignored")
+	}
+}

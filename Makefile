@@ -15,8 +15,8 @@ dist: build
 	mkdir -p dist/linux-amd64/docs dist/linux-arm64/docs
 	cp docs/VERIFICATION.md dist/linux-amd64/docs/
 	cp docs/VERIFICATION.md dist/linux-arm64/docs/
-	tar -czf dist/claude-desktop-session-sync-linux-0.3.0-linux-amd64.tar.gz -C dist/linux-amd64 .
-	tar -czf dist/claude-desktop-session-sync-linux-0.3.0-linux-arm64.tar.gz -C dist/linux-arm64 .
+	tar -czf dist/claude-desktop-session-sync-linux-0.3.1-linux-amd64.tar.gz -C dist/linux-amd64 .
+	tar -czf dist/claude-desktop-session-sync-linux-0.3.1-linux-arm64.tar.gz -C dist/linux-arm64 .
 
 clean:
 	rm -rf dist

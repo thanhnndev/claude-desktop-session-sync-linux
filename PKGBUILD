@@ -24,6 +24,7 @@ check() {
 package() {
   install -Dm755 "$srcdir/claude-session-sync" "$pkgdir/usr/bin/claude-session-sync"
   install -Dm644 "$startdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 "$startdir/README_VI.md" "$pkgdir/usr/share/doc/$pkgname/README_VI.md"
   install -Dm644 "$startdir/docs/VERIFICATION.md" "$pkgdir/usr/share/doc/$pkgname/docs/VERIFICATION.md"
   install -Dm644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

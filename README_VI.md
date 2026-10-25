@@ -4,7 +4,7 @@
 
 Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ các bản ghi sidebar còn thiếu giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
 
-**Trạng thái 0.1.0:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
+**Trạng thái 0.1.1:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
 
 ## Hai lựa chọn sao chép
 
@@ -95,10 +95,10 @@ Các lệnh khác nhận cùng hai option này. Không tự chuyển đổi layo
 
 - Chỉ thêm file còn thiếu vào các thư mục account/org đã có. File đích được xuất bản nguyên vẹn bằng hard link nguyên tử và từ chối tên đã tồn tại.
 - Bản ghi cùng tên nhưng khác nội dung được báo **conflict**, không chọn bản mới nhất theo thời gian. Một transcript được nhiều ID nội bộ trỏ tới cũng bị chặn để tránh nhân đôi.
-- Khi tiếp tục làm việc ở account B, transcript chung vẫn cập nhật; metadata riêng của account A có thể cũ. Bản 0.1.0 **không tự hòa giải metadata bị lệch**. Phải kiểm tra conflict trước khi chuyển lại. Đây không phải đồng bộ liên tục toàn trạng thái runtime.
+- Khi tiếp tục làm việc ở account B, transcript chung vẫn cập nhật; metadata riêng của account A có thể cũ. Bản 0.1.1 **không tự hòa giải metadata bị lệch**. Phải kiểm tra conflict trước khi chuyển lại. Đây không phải đồng bộ liên tục toàn trạng thái runtime.
 - Dấu `deleted_<id>` ở bất kỳ bucket nào ngăn thêm lại session có ID/alias tương ứng (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, ID tên file).
 - Không dọn/di chuyển các bản sao cũ đã tồn tại của session có tombstone, không phát tán tombstone, không sửa worktree registry.
-- Chỉ sao chép session có transcript được chứng minh qua dòng `entrypoint: claude-desktop` và `sessionId` phù hợp trong 100 dòng/1 MiB đầu. Transcript thiếu, không rõ nguồn, hoặc có `.desktop-released.json` sẽ bị bỏ qua.
+- Đọc toàn bộ transcript theo luồng, kể cả dòng lớn và phần lịch sử kế thừa. Session cần có đúng ID và nguồn Desktop. Nhánh chưa có lượt Desktop riêng chỉ được chấp nhận khi metadata trỏ đúng session cha đã được xác minh là Desktop, transcript chứa lịch sử Desktop của cha và cả ID của nhánh mới. Chỉ có lịch sử kế thừa không liên quan hoặc dấu nguồn CLI thì không đủ. Transcript thiếu/chưa rõ nguồn hoặc có `.desktop-released.json` sẽ bị bỏ qua; JSON bị lỗi hay lỗi đọc file sẽ dừng lập kế hoạch và báo rõ nguyên nhân.
 - Transcript Desktop không còn pointer được liệt kê để điều tra; công cụ **không bịa ID mới** hoặc tự dựng metadata/worktree lease.
 
 Các giới hạn trên ưu tiên giữ dữ liệu gốc. Chạy `plan` trước mỗi lần áp dụng.
@@ -120,7 +120,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo đưa bản ghi được thêm vào quarantine trong cùng backup, không hủy nội dung. Nếu app đã sửa bản ghi, undo từ chối để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup.
+Undo đưa bản ghi được thêm vào quarantine trong cùng backup, không hủy nội dung. Nếu app đã sửa bản ghi, undo từ chối để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.1.1 vẫn hỗ trợ hoàn tác backup của bản 0.1.0.
 
 ## Build và test
 

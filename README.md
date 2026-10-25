@@ -4,7 +4,7 @@
 
 A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It copies missing sidebar records between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 
-**Version 0.1.0 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
+**Version 0.1.1 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
 
 ## Copy modes
 
@@ -95,10 +95,10 @@ Other commands accept the same two options. Flatpak, Wine, Windows, macOS, SSH a
 
 - Only missing files are added to existing account/org directories. Each complete destination file is published atomically using a hard link, refusing an existing destination name.
 - Records with the same filename but different contents are reported as a **conflict**; the tool does not select the newest version by timestamp. Multiple internal IDs pointing to the same transcript are also blocked to prevent duplication.
-- Continuing work under account B updates the shared transcript, while account A's metadata may become stale. Version 0.1.0 **does not reconcile diverged metadata automatically**. Check conflicts before switching back. This is not continuous synchronization of all runtime state.
+- Continuing work under account B updates the shared transcript, while account A's metadata may become stale. Version 0.1.1 **does not reconcile diverged metadata automatically**. Check conflicts before switching back. This is not continuous synchronization of all runtime state.
 - A `deleted_<id>` marker in any bucket prevents adding a session with that ID or alias (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, or the filename ID).
 - Existing stale copies of tombstoned sessions are not cleaned up or moved. Tombstones are not propagated, and the worktree registry is not modified.
-- Sessions are only copied when the transcript's first 100 lines/1 MiB prove `entrypoint: claude-desktop` and a matching `sessionId`. Missing transcripts, unproven provenance and `.desktop-released.json` sidecars cause the session to be skipped.
+- The complete transcript is streamed, including large lines and inherited history. A session needs a matching ID and Desktop provenance. A fork without its own Desktop turn is accepted only when its metadata points to a proven Desktop parent, its transcript contains that parent's Desktop identity, and it also contains the child's own ID. Unrelated inherited history or a CLI entrypoint is insufficient. Missing/unproven transcripts and `.desktop-released.json` sidecars cause the session to be skipped; malformed transcripts or read errors stop planning with an explicit error.
 - Desktop transcripts without a pointer are listed for investigation; the tool **does not invent IDs** or reconstruct metadata/worktree leases automatically.
 
 These limits preserve the original data. Run `plan` before every apply operation.
@@ -120,7 +120,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo moves added records into quarantine within the same backup, preserving their contents. If the app has modified a record, undo refuses to remove it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically.
+Undo moves added records into quarantine within the same backup, preserving their contents. If the app has modified a record, undo refuses to remove it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.1.1 also supports undoing 0.1.0 backups.
 
 ## Build and test
 

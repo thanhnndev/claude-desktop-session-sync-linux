@@ -439,3 +439,164 @@ func TestExplicitAllPreservesBytesIncludingConfig(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestDesktopProofAfterInheritedPrefix(t *testing.T) {
+	for _, mode := range []string{"all", "chat"} {
+		t.Run(mode, func(t *testing.T) {
+			f := setup(t)
+			var b bytes.Buffer
+			for i := 0; i < 1500; i++ {
+				b.WriteString(`{"type":"user","sessionId":"ffffffff-ffff-4fff-8fff-ffffffffffff","entrypoint":"claude-desktop"}` + "\n")
+			}
+			b.WriteString(`{"type":"assistant","sessionId":"` + cli + `","entrypoint":"claude-desktop"}` + "\n")
+			put(t, filepath.Join(f.projects, "project", cli+".jsonl"), b.Bytes())
+			if len(plan(t, f, mode).Actions) != 1 {
+				t.Fatal("late Desktop provenance missed")
+			}
+		})
+	}
+}
+func TestTranscriptLineLargerThanOneMiB(t *testing.T) {
+	f := setup(t)
+	b := []byte(`{"message":"` + strings.Repeat("x", 2*1024*1024) + `"}` + "\n" + `{"sessionId":"` + cli + `","entrypoint":"claude-desktop"}`)
+	put(t, filepath.Join(f.projects, "project", cli+".jsonl"), b)
+	if len(plan(t, f, "all").Actions) != 1 {
+		t.Fatal("large transcript line truncated scan")
+	}
+}
+
+const parentInternal = "11111111-1111-4111-8111-111111111111"
+const parentCLI = "22222222-2222-4222-8222-222222222222"
+
+func forkFixture(t *testing.T) fixture {
+	t.Helper()
+	f := setup(t)
+	d := object(t, f.record)
+	d["forkedFromSessionId"] = "local_" + parentInternal
+	d["spawnedFrom"] = map[string]any{"sessionId": "local_" + parentInternal, "sideSession": true, "userFork": true}
+	save(t, f.record, d)
+	parent := map[string]any{"sessionId": "local_" + parentInternal, "cliSessionId": parentCLI, "cwd": d["cwd"], "title": "Parent"}
+	save(t, filepath.Join(f.data, "claude-code-sessions", f.a, "local_"+parentInternal+".json"), parent)
+	save(t, filepath.Join(f.projects, "project", parentCLI+".jsonl"), map[string]any{"sessionId": parentCLI, "entrypoint": "claude-desktop"})
+	put(t, filepath.Join(f.projects, "project", cli+".jsonl"), []byte(`{"sessionId":"`+parentCLI+`","entrypoint":"claude-desktop"}`+"\n"+`{"type":"custom-title","sessionId":"`+cli+`","customTitle":"Side chat"}`+"\n"))
+	return f
+}
+func childPlanned(r Report) bool {
+	for _, a := range r.Actions {
+		if filepath.Base(a.Target) == "local_"+internal+".json" {
+			return true
+		}
+	}
+	return false
+}
+func TestDesktopForkWithoutChildTurns(t *testing.T) {
+	for _, mode := range []string{"all", "chat"} {
+		t.Run(mode, func(t *testing.T) {
+			f := forkFixture(t)
+			r := plan(t, f, mode)
+			if !childPlanned(r) || len(r.LineageVerified) != 1 {
+				t.Fatal("proven Desktop fork skipped", r.Warnings)
+			}
+		})
+	}
+}
+func TestForkProofRejectsUnprovenRelationships(t *testing.T) {
+	for _, kind := range []string{"no-parent-reference", "missing-parent", "wrong-spawned-parent", "unrelated-history", "missing-child-id", "cli-parent", "cli-child", "cycle", "conflicting-parent-pointer"} {
+		t.Run(kind, func(t *testing.T) {
+			f := forkFixture(t)
+			parentPath := filepath.Join(f.data, "claude-code-sessions", f.a, "local_"+parentInternal+".json")
+			childPath := filepath.Join(f.projects, "project", cli+".jsonl")
+			switch kind {
+			case "no-parent-reference":
+				d := object(t, f.record)
+				delete(d, "forkedFromSessionId")
+				save(t, f.record, d)
+			case "missing-parent":
+				os.Remove(parentPath)
+			case "wrong-spawned-parent":
+				d := object(t, f.record)
+				d["spawnedFrom"] = map[string]any{"sessionId": "local_" + prior}
+				save(t, f.record, d)
+			case "unrelated-history":
+				put(t, childPath, []byte(`{"sessionId":"`+prior+`","entrypoint":"claude-desktop"}`+"\n"+`{"sessionId":"`+cli+`","type":"mode"}`))
+			case "missing-child-id":
+				save(t, childPath, map[string]any{"sessionId": parentCLI, "entrypoint": "claude-desktop"})
+			case "cli-parent":
+				save(t, filepath.Join(f.projects, "project", parentCLI+".jsonl"), map[string]any{"sessionId": parentCLI, "entrypoint": "cli"})
+			case "cli-child":
+				h, e := os.OpenFile(childPath, os.O_APPEND|os.O_WRONLY, 0600)
+				if e != nil {
+					t.Fatal(e)
+				}
+				h.WriteString(`{"sessionId":"` + cli + `","entrypoint":"cli"}` + "\n")
+				h.Close()
+			case "cycle":
+				d := object(t, parentPath)
+				d["forkedFromSessionId"] = "local_" + internal
+				save(t, parentPath, d)
+				put(t, filepath.Join(f.projects, "project", parentCLI+".jsonl"), []byte(`{"sessionId":"`+cli+`","entrypoint":"claude-desktop"}`+"\n"+`{"sessionId":"`+parentCLI+`","type":"mode"}`))
+			case "conflicting-parent-pointer":
+				d := object(t, parentPath)
+				d["cliSessionId"] = prior
+				save(t, filepath.Join(f.data, "claude-code-sessions", f.b, "local_"+parentInternal+".json"), d)
+			}
+			if childPlanned(plan(t, f, "all")) {
+				t.Fatal("unproven fork accepted")
+			}
+		})
+	}
+}
+func TestMalformedTranscriptCannotHideAfterValidMarker(t *testing.T) {
+	f := setup(t)
+	put(t, filepath.Join(f.projects, "project", cli+".jsonl"), []byte(`{"sessionId":"`+cli+`","entrypoint":"claude-desktop"}`+"\n"+`{"partial":`))
+	if _, e := scan(f.data, f.projects, "", "", "all"); e == nil {
+		t.Fatal("malformed tail silently ignored")
+	}
+}
+func TestFIFOTranscriptRefused(t *testing.T) {
+	f := setup(t)
+	p := filepath.Join(f.projects, "project", cli+".jsonl")
+	os.Remove(p)
+	if e := syscall.Mkfifo(p, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := scan(f.data, f.projects, "", "", "all"); e == nil {
+		t.Fatal("FIFO transcript accepted")
+	}
+}
+func TestUndoPreviousVersionBackup(t *testing.T) {
+	noProcesses(t)
+	f := setup(t)
+	id, e := apply(plan(t, f, "all"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := filepath.Join(f.data, backupDir, id, "manifest.json")
+	b, _ := os.ReadFile(p)
+	var j Journal
+	if e = json.Unmarshal(b, &j); e != nil {
+		t.Fatal(e)
+	}
+	j.Version = "0.1.0"
+	b, _ = json.Marshal(j)
+	put(t, p, b)
+	if _, e = undo(f.data, id, true); e != nil {
+		t.Fatal("upgrade broke old backup undo", e)
+	}
+}
+
+func TestChatForkKeepsProvenanceAfterCopy(t *testing.T) {
+	noProcesses(t)
+	f := forkFixture(t)
+	r := plan(t, f, "chat")
+	if _, e := apply(r); e != nil {
+		t.Fatal(e)
+	}
+	if len(plan(t, f, "chat").Actions) != 0 {
+		t.Fatal("chat fork sync is not idempotent")
+	}
+	target := filepath.Join(f.data, "claude-code-sessions", f.b, filepath.Base(f.record))
+	if object(t, target)["forkedFromSessionId"] != "local_"+parentInternal {
+		t.Fatal("chat lost parent reference")
+	}
+}

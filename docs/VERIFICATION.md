@@ -16,7 +16,7 @@ Environment: CachyOS (`ID=cachyos`, `ID_LIKE=arch`), x86_64. `pacman -Qo` and `p
 
 A bounded filesystem inventory found actual files under `~/.config/Claude/claude-code-sessions`, not an assumed XDG path. There were four account/org buckets, spanning two distinct account IDs and two organization IDs. One bucket held 89 `local_*.json` records; the other three were empty. No deletion markers were present in these four buckets. Account UUIDs, conversation titles, transcript contents and credentials are intentionally absent from this repository.
 
-94 top-level project JSONL transcripts were present under `~/.claude/projects/*/*.jsonl`. Each of the 89 pointers had a matching transcript **filename**, and a Desktop entrypoint was found in that file. Two files had an entrypoint record whose embedded `sessionId` differed from the pointer's `cliSessionId`; their lineage was not proven, so the tool conservatively skips them. Filename presence alone is not enough to assert a resumable transcript.
+94 top-level project JSONL transcripts were present under `~/.claude/projects/*/*.jsonl`. Each of the 89 pointers had a matching transcript **filename**, and a Desktop entrypoint was found in that file. The initial 0.1.0 check saw two files whose first entrypoint records used a different `sessionId`, and skipped them because that bounded check did not prove lineage. The complete-file and parent-pointer investigation below corrects that limitation in 0.1.1. Filename presence alone is not enough to assert a resumable transcript.
 
 App `logs/main*.log` independently contained `Loaded N persisted sessions from .../claude-code-sessions/<account>/<org>` lines for the observed folders, including account/org switches. This supports the real Linux metadata location and account/org scoping. It does not prove a newly copied record will successfully resume under a different login.
 
@@ -67,3 +67,20 @@ Do not mark cross-account resume verified merely because a pointer copy succeede
 ## Differences from upstream
 
 The Windows upstream chooses newest valid versions, propagates tombstones, quarantines stale records, repairs transcript-only entries/worktree leases, merges some global account settings, and installs hooks/watchers. This Linux implementation deliberately starts with an offline additive core. It has no watcher, hooks, scheduled services, automatic token swapping, newest-wins replacement, tombstone cleanup, fabricated orphan pointers, global settings merge or lease repair. Those features are not claimed complete.
+
+## Follow-up fix: complete transcripts and Desktop forks (0.1.1)
+
+The 0.1.0 provenance check read only the first 100 lines / 1 MiB and ignored scanner errors. This wrongly excluded two real Desktop forks with inherited parent history. Their names, IDs and contents remain local and are not included in this report.
+
+Direct observation of the two full JSONL files and their existing Desktop pointer records established:
+
+- One child has 1,514 transcript lines. Its own ID first appears at line 1,419, and its own matching `entrypoint: claude-desktop` record at line 1,426. The earlier prefix belongs to its parent; this is direct Desktop provenance beyond the old limit.
+- The other child has 1,367 lines, with its own ID in metadata rows from line 1,362 onward and no child conversation turns yet. Its `forkedFromSessionId` and `spawnedFrom.sessionId` agree and name an existing Desktop parent pointer. That parent's `cliSessionId` exactly matches the Desktop identity in the inherited child transcript. The parent also has its own proven Desktop transcript. This verifies the relationship without guessing IDs or modifying either file.
+
+0.1.1 streams each complete JSONL file with memory bounded by the largest line, rather than the entire transcript. Large lines and final lines without a newline are supported. Invalid JSON or read errors fail explicitly instead of silently leaving a partial provenance result. Symlinks and non-regular transcripts are refused before opening.
+
+A child without a direct Desktop entrypoint needs its own ID in the file, an explicit parent reference, a proven parent transcript, and matching inherited Desktop identity for a known parent ID/alias. Conflicting parent identities, disagreement between parent references, CLI entrypoints, unrelated inherited history, missing parents and cyclic unproven ancestry are rejected. `lineage_verified_sessions` reports accepted inherited forks. The minimal chat projection retains the parent reference so subsequent runs do not lose that evidence. Both 0.1.0 and 0.1.1 backup manifests remain supported by undo.
+
+New regression tests cover both real failure patterns using synthetic data, markers after 1,500 inherited lines, lines over 1 MiB, malformed tails, FIFO transcripts, invalid fork relationships, and compatibility with older backups.
+
+**Updated real-data dry-run:** 89 records, four account/org buckets, **267 proposed additions**, zero missing/unproven transcripts, zero warnings, one fork verified through parent lineage. No live Claude metadata or transcripts were written. UI resume/new-turn validation remains outstanding.

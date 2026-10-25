@@ -24,16 +24,17 @@ import (
 	"time"
 )
 
-const version = "0.1.0"
+const version = "0.1.1"
 
 var guard = processGuard
 
 const backupDir = ".linux-session-sync-backups"
 
 var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-var allowed = strings.Fields("sessionId cliSessionId unarchivedCliSessionId priorCliSessionIds cwd originCwd worktreePath worktreeName folderWorktrees worktreeLazy worktreePinned sourceBranch branch gitAnchors gitAnchorsFolderRealpath gitAnchorsLookupOnly createdAt lastActivityAt lastFocusedAt title titleSource isArchived model effort")
+var allowed = strings.Fields("sessionId cliSessionId unarchivedCliSessionId priorCliSessionIds forkedFromSessionId cwd originCwd worktreePath worktreeName folderWorktrees worktreeLazy worktreePinned sourceBranch branch gitAnchors gitAnchorsFolderRealpath gitAnchorsLookupOnly createdAt lastActivityAt lastFocusedAt title titleSource isArchived model effort")
 
 type Record struct {
+	Parent             string
 	Excluded           []string
 	Path, Bucket, Name string
 	Data               map[string]any
@@ -47,6 +48,7 @@ type Action struct {
 	Payload json.RawMessage `json:"payload"`
 }
 type Report struct {
+	LineageVerified    []string `json:"lineage_verified_sessions"`
 	FullRecord         bool     `json:"full_record"`
 	CopyMode           string   `json:"copy_mode"`
 	Excluded           []string `json:"excluded_sensitive_fields"`
@@ -241,6 +243,13 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 			return r, errors.New("non-local session refused")
 		}
 	}
+	r.Parent = str(d, "forkedFromSessionId")
+	if r.Parent != "" && (!strings.HasPrefix(r.Parent, "local_") || !uuid.MatchString(strings.TrimPrefix(r.Parent, "local_"))) {
+		r.Parent = ""
+	}
+	if spawn, ok := d["spawnedFrom"].(map[string]any); ok && r.Parent != "" && str(spawn, "sessionId") != r.Parent {
+		r.Parent = ""
+	}
 	r.IDs = []string{id}
 	for _, k := range []string{"cliSessionId", "unarchivedCliSessionId"} {
 		if s := str(d, k); s != "" {
@@ -345,13 +354,53 @@ func list(r *os.Root, p string) ([]fs.DirEntry, error) {
 	}
 	return fs.ReadDir(r.FS(), p)
 }
-func transcriptIndex(p string) (map[string]string, []string, error) {
+
+// A fork may retain its parent's transcript prefix before any child turns exist.
+// Record only identity/provenance fields while streaming the complete JSONL file.
+type Transcript struct {
+	Path             string
+	SessionIDs       map[string]bool
+	DesktopIDs       map[string]bool
+	OtherEntrypoints map[string]bool
+}
+
+func inspectTranscript(h io.Reader, path string) (Transcript, error) {
+	tr := Transcript{Path: path, SessionIDs: map[string]bool{}, DesktopIDs: map[string]bool{}, OtherEntrypoints: map[string]bool{}}
+	rd := bufio.NewReader(h)
+	for line := 1; ; line++ {
+		b, e := rd.ReadBytes('\n')
+		if e != nil && e != io.EOF {
+			return tr, fmt.Errorf("read transcript %s at line %d: %w", path, line, e)
+		}
+		if len(bytes.TrimSpace(b)) > 0 {
+			var d struct {
+				SessionID  string `json:"sessionId"`
+				Entrypoint string `json:"entrypoint"`
+			}
+			if err := json.Unmarshal(b, &d); err != nil {
+				return tr, fmt.Errorf("invalid transcript JSON at %s line %d: %w", path, line, err)
+			}
+			if uuid.MatchString(d.SessionID) {
+				tr.SessionIDs[d.SessionID] = true
+				if d.Entrypoint == "claude-desktop" {
+					tr.DesktopIDs[d.SessionID] = true
+				} else if d.Entrypoint != "" {
+					tr.OtherEntrypoints[d.SessionID] = true
+				}
+			}
+		}
+		if e == io.EOF {
+			return tr, nil
+		}
+	}
+}
+func transcriptIndex(p string) (map[string]Transcript, []string, error) {
 	r, e := realRoot(p)
 	if e != nil {
 		return nil, nil, e
 	}
 	defer r.Close()
-	idx := map[string]string{}
+	idx := map[string]Transcript{}
 	desktop := []string{}
 	dirs, e := list(r, ".")
 	if e != nil {
@@ -380,31 +429,30 @@ func transcriptIndex(p string) (map[string]string, []string, error) {
 			if e := safe(r, path, false); e != nil {
 				return nil, nil, e
 			}
+			info, e := r.Lstat(path)
+			if e != nil {
+				return nil, nil, e
+			}
+			if !info.Mode().IsRegular() {
+				return nil, nil, errors.New("non-regular transcript")
+			}
 			h, e := r.Open(path)
 			if e != nil {
 				return nil, nil, e
 			}
-			info, e := h.Stat()
-			if e != nil || !info.Mode().IsRegular() {
-				h.Close()
-				return nil, nil, errors.New("non-regular transcript")
+			tr, e := inspectTranscript(h, path)
+			closeErr := h.Close()
+			if e != nil {
+				return nil, nil, e
 			}
-			sc := bufio.NewScanner(io.LimitReader(h, 1024*1024))
-			sc.Buffer(make([]byte, 4096), 1024*1024)
-			proven := false
-			for n := 0; n < 100 && sc.Scan(); n++ {
-				var d map[string]any
-				if json.Unmarshal(sc.Bytes(), &d) == nil && str(d, "sessionId") == id && str(d, "entrypoint") == "claude-desktop" {
-					proven = true
-					break
-				}
+			if closeErr != nil {
+				return nil, nil, closeErr
 			}
-			h.Close()
-			if proven {
-				if _, ok := idx[id]; ok {
-					return nil, nil, fmt.Errorf("ambiguous transcript ID %s", id)
-				}
-				idx[id] = path
+			if _, ok := idx[id]; ok {
+				return nil, nil, fmt.Errorf("ambiguous transcript ID %s", id)
+			}
+			idx[id] = tr
+			if tr.DesktopIDs[id] && !tr.OtherEntrypoints[id] {
 				desktop = append(desktop, id)
 			}
 		}
@@ -412,8 +460,55 @@ func transcriptIndex(p string) (map[string]string, []string, error) {
 	sort.Strings(desktop)
 	return idx, desktop, nil
 }
+func transcriptID(rec Record) string {
+	if s := str(rec.Data, "cliSessionId"); s != "" {
+		return s
+	}
+	return str(rec.Data, "unarchivedCliSessionId")
+}
+
+// A bare Desktop marker from an unrelated inherited session is insufficient.
+// Forks need a real parent pointer, a proven Desktop parent, inherited parent
+// identity in the child's transcript, and a row carrying the child's own ID.
+func transcriptProof(rec Record, index map[string]Transcript, parents map[string][]Record, visiting map[string]bool) string {
+	sid := transcriptID(rec)
+	tr, ok := index[sid]
+	if !ok || !tr.SessionIDs[sid] || tr.OtherEntrypoints[sid] {
+		return ""
+	}
+	if tr.DesktopIDs[sid] {
+		return "direct"
+	}
+	if rec.Parent == "" || visiting[rec.Name] || len(visiting) >= 64 {
+		return ""
+	}
+	candidates := parents[rec.Parent]
+	if len(candidates) == 0 {
+		return ""
+	}
+	parentSID := transcriptID(candidates[0])
+	parentParent := candidates[0].Parent
+	for _, parent := range candidates {
+		if transcriptID(parent) != parentSID || parent.Parent != parentParent {
+			return ""
+		}
+	}
+	visiting[rec.Name] = true
+	defer delete(visiting, rec.Name)
+	parent := candidates[0]
+	if transcriptProof(parent, index, parents, visiting) == "" {
+		return ""
+	}
+	for _, alias := range parent.IDs {
+		if tr.DesktopIDs[alias] && !tr.OtherEntrypoints[alias] {
+			return "fork"
+		}
+	}
+	return ""
+}
+
 func scan(data, projects, source, target, mode string) (Report, error) {
-	rep := Report{Version: version, DataDir: data, ProjectsDir: projects, CopyMode: mode, FullRecord: mode == "all", Excluded: []string{}, Actions: []Action{}, Warnings: []string{}, Orphans: []string{}}
+	rep := Report{Version: version, DataDir: data, ProjectsDir: projects, CopyMode: mode, FullRecord: mode == "all", Excluded: []string{}, Actions: []Action{}, Warnings: []string{}, Orphans: []string{}, LineageVerified: []string{}}
 	r, e := realRoot(data)
 	if e != nil {
 		return rep, e
@@ -510,11 +605,13 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 	rep.Records = len(records)
 	known := map[string]bool{}
 	groups := map[string][]Record{}
+	parents := map[string][]Record{}
 	for _, rec := range records {
 		for _, id := range rec.IDs {
 			known[id] = true
 		}
 		groups[rec.Name] = append(groups[rec.Name], rec)
+		parents[strings.TrimSuffix(rec.Name, ".json")] = append(parents[strings.TrimSuffix(rec.Name, ".json")], rec)
 	}
 	for _, id := range desktop {
 		if !known[id] {
@@ -583,16 +680,17 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			rep.Warnings = append(rep.Warnings, "Alias collision; blocked: "+name)
 			continue
 		}
-		sid := str(first.Data, "cliSessionId")
-		if sid == "" {
-			sid = str(first.Data, "unarchivedCliSessionId")
-		}
-		tp, ok := transcripts[sid]
-		if !ok {
+		sid := transcriptID(first)
+		proof := transcriptProof(first, transcripts, parents, map[string]bool{})
+		if proof == "" {
 			rep.MissingTranscripts++
 			rep.Warnings = append(rep.Warnings, "No proven Desktop transcript; skipped: "+name)
 			continue
 		}
+		if proof == "fork" {
+			rep.LineageVerified = append(rep.LineageVerified, first.Name)
+		}
+		tp := transcripts[sid].Path
 		// A release sidecar means the transcript was explicitly released/deleted.
 		tr, e := realRoot(projects)
 		if e != nil {
@@ -850,7 +948,7 @@ func undo(data, id string, apply bool) ([]string, error) {
 	if e = decode(b, &j); e != nil {
 		return nil, e
 	}
-	if j.Version != version {
+	if j.Version != "0.1.0" && j.Version != version {
 		return nil, errors.New("unsupported manifest version")
 	}
 	moves := []string{}

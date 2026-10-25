@@ -986,10 +986,12 @@ func run(args []string) error {
 	}
 	if *write {
 		id, e := apply(rep)
+		if id != "" {
+			fmt.Fprintln(os.Stderr, "Backup ID:", id)
+		}
 		if e != nil {
 			return e
 		}
-		fmt.Fprintln(os.Stderr, "Backup ID:", id)
 	}
 	if *summary || cmd == "doctor" {
 		for i := range rep.Actions {

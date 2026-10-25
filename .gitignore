@@ -1,0 +1,8 @@
+/dist/
+/src/
+/pkg/
+/claude-session-sync
+/*.pkg.tar.*
+/BUILD-REPORT.txt
+*.log
+.linux-session-sync-backups/

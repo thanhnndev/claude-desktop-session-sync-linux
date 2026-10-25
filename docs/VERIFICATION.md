@@ -1,0 +1,69 @@
+# Evidence and compatibility report
+
+Investigation date: 2026-10-25 (Asia/Ho_Chi_Minh).
+
+## Primary sources
+
+- Upstream examined at commit [`4a19d0b0ceefdcd571605d902754689fc41deb54`](https://github.com/realperest/claude-desktop-session-sync/tree/4a19d0b0ceefdcd571605d902754689fc41deb54), including `README.md`, `docs/FINDINGS.md`, `hesap-oturum-esitle.ps1` and `tests/Test-Sync.ps1`.
+- [Issue #74662 and comments](https://github.com/anthropics/claude-code/issues/74662): the initial server-sidebar diagnosis was refined by later pointer-file/account/org observations. These are reports, not a public storage contract.
+- [October cross-account Desktop versus terminal reproduction](https://github.com/anthropics/claude-code/issues/74662#issuecomment-6202310196): the author reports that the resume deep link imported a terminal-created session but did not import a Desktop-created session under another account. This prevents treating CLI resume as the requested fix.
+- [Official Desktop reference](https://code.claude.com/docs/en/desktop) describes `claude --desktop --resume` for existing CLI sessions; it does not document this metadata synchronization protocol. Current documentation was retrieved with Context7 CLI, resolving `/websites/code_claude` first, then fetching Desktop resume documentation.
+- [Official Linux documentation](https://code.claude.com/docs/en/desktop-linux) describes Linux beta for Debian/Ubuntu and recommends CLI on other distributions. The CachyOS installation below is a directly observed working package/layout, not evidence of official Arch support.
+
+## Direct local observations before implementation
+
+Environment: CachyOS (`ID=cachyos`, `ID_LIKE=arch`), x86_64. `pacman -Qo` and `pacman -Qi` identified `claude-desktop 3.6556.2-1`, installed from the `cachyos` repository. The installed desktop entry executes `claude-desktop %U`; the executable resolves to `/usr/lib/claude-desktop/claude-desktop`.
+
+A bounded filesystem inventory found actual files under `~/.config/Claude/claude-code-sessions`, not an assumed XDG path. There were four account/org buckets, spanning two distinct account IDs and two organization IDs. One bucket held 89 `local_*.json` records; the other three were empty. No deletion markers were present in these four buckets. Account UUIDs, conversation titles, transcript contents and credentials are intentionally absent from this repository.
+
+94 top-level project JSONL transcripts were present under `~/.claude/projects/*/*.jsonl`. Each of the 89 pointers had a matching transcript **filename**, and a Desktop entrypoint was found in that file. Two files had an entrypoint record whose embedded `sessionId` differed from the pointer's `cliSessionId`; their lineage was not proven, so the tool conservatively skips them. Filename presence alone is not enough to assert a resumable transcript.
+
+App `logs/main*.log` independently contained `Loaded N persisted sessions from .../claude-code-sessions/<account>/<org>` lines for the observed folders, including account/org switches. This supports the real Linux metadata location and account/org scoping. It does not prove a newly copied record will successfully resume under a different login.
+
+The real records contain, among other fields: `sessionId`, `cliSessionId`, `cwd`, `originCwd`, `gitAnchors`, timestamps, `isArchived`, title, `permissionMode`, `enabledMcpTools`, `remoteMcpServersConfig`, `sessionSettings`, `spawnSeed`, `promptAppendSnapshot`, and runtime/status fields. Treating all of those as mere history would lose workflow state. `--copy all` therefore copies the entire source file exactly, without automatic redaction; `--copy chat` is a separate minimal projection.
+
+Global files `ccd-session-presets.json`, `mcp-user-tool-toggles.json` and `git-worktrees.json` also existed. Their top-level schemas were inspected without exporting values. They are not modified: this version does not claim account-wide saved-environment/configuration migration.
+
+## Shipped artifact inspection
+
+Installed `/usr/lib/claude-desktop/resources/app.asar`:
+
+```text
+package.json version: 3.6556.2
+ASAR SHA-256: 5884c585791dd21c1aa6d933fc5fb634e3846f7020d0f12bf4771b8833109d8e
+```
+
+REA static inventory evidence: `ev_77f923c5addd64611a10980ef71d53898c2978eb8e2ecfd8434a7c122a87750d`.
+
+Focused analysis parent evidence: `ev_309e0c8deda3a1f8d9ec5c3e0ca952d5981e20d350d34cbd721e8750e761af60`; summary evidence: `ev_7325b6c2ba52f664f05a7eb8620c7edbd7d5894075af085d2686470639606b6f`.
+
+Exact selected packaged modules: `.vite/build/index.chunk-Bd0pIhWA.js` (persisted record hydration) and `.vite/build/index.chunk-M-nBbhoO.js` (local session manager). Manual inert-source inspection found `loadSessionRecords()` enumerating `local_*.json`, parsing JSON, hydrating the record, using its stored `sessionId`, and loading local filesystem/worktree state. The hydration helper (`RM`, exported as `Mt` in this build) reads permission, MCP, session settings, worktree and runtime fields. `writeSessionToDisk()` serializes session state and can overwrite its on-disk copy from memory, supporting the offline-only design.
+
+This was static inspection, not execution. Analysis selected two modules, left 561 inventoried files outside scope, and hit graph/unknown/primitive-byte retention limits. It does not establish a complete control-flow or authentication model. No proprietary app code is redistributed here.
+
+## Implementation verification
+
+- Unit/integration fixtures exercise both copy modes; exact-byte preservation of all-mode configuration including embedded test credentials; Desktop versus CLI transcript provenance; alias collisions; corrupt JSON; conflicting records; filename/ID validation; tombstones for all alias kinds; release sidecars; orphan reporting; filesystem path/symlink/FIFO refusal; exclusive locking; stale plans; process refusal; backup permission/checksum; additive publication; idempotence; undo; retention of user-modified records.
+- Apply/undo integration tests run in temporary directories with a stubbed process guard. Production retains process inspection. The actual machine's `doctor` did independently detect a running Claude process.
+- Real-data inspection was **read-only**: `doctor` and `plan`. Both modes produced 261 proposed additions (87 proven pointers × 3 missing buckets); two pointers were skipped due to the lineage mismatch above. `doctor` additionally reported Claude still running.
+- `--copy all` keeps original bytes. Existing records are never updated, even if another account has a newer copy; conflicts are reported. Transcripts are read for provenance but never edited or copied. This is additive sidebar recovery, not a continuously reconciled metadata database.
+- Final test/build results and artifact checksums are in `BUILD-REPORT.txt` and `SHA256SUMS` in the release bundle.
+
+## Kiem chung UI con thieu
+
+**Not performed:** real-user account logout/login automation, mutation of live user metadata, reopening a migrated session in the UI, sending a new turn under the second account, worktree execution across accounts, MCP authentication under the target account, saved environment resolution, or physical ARM64 execution. Desktop was running; it was not terminated or signed out to conduct a destructive live experiment.
+
+To finish UI validation on the installed version:
+
+1. Create a disposable session **from Desktop Code**, give it a recognizable message and a non-sensitive session setting. Record the app version and original account/org bucket.
+2. Sign in to the target account/org once, then quit the whole app and its workers.
+3. Run `plan --copy all --from ... --to ... --summary`; verify one intended session's IDs/configuration. Use a disposable data set for the experiment, or review the complete plan before applying; `--from/--to` selects buckets, not a single record.
+4. Apply offline; record the backup ID; launch Desktop under the target login. Verify sidebar listing, full history, cwd/branch/worktree, session settings and MCP availability.
+5. Send a harmless follow-up, quit again, and inspect the resulting pointer/transcript. Check for changed CLI IDs or conflicting metadata before switching back.
+6. Test `chat` separately, expecting default permissions and no copied session configuration. Test undo before any target session edit; after an edit, expect undo to refuse that record.
+
+Do not mark cross-account resume verified merely because a pointer copy succeeded. Different app versions, account policies, account-scoped environments, pruned transcripts, missing worktrees or app-side import rules can still prevent continuation.
+
+## Differences from upstream
+
+The Windows upstream chooses newest valid versions, propagates tombstones, quarantines stale records, repairs transcript-only entries/worktree leases, merges some global account settings, and installs hooks/watchers. This Linux implementation deliberately starts with an offline additive core. It has no watcher, hooks, scheduled services, automatic token swapping, newest-wins replacement, tombstone cleanup, fabricated orphan pointers, global settings merge or lease repair. Those features are not claimed complete.

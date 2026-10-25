@@ -4,7 +4,7 @@
 
 Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ các bản ghi sidebar còn thiếu giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
 
-**Trạng thái 0.1.1:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
+**Trạng thái 0.2.0:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
 
 ## Hai lựa chọn sao chép
 
@@ -31,6 +31,30 @@ install -m 755 claude-session-sync ~/.local/bin/claude-session-sync
 ```
 
 Hoặc cài file `*.pkg.tar.zst` đã build bằng `sudo pacman -U <file.pkg.tar.zst>`. ARM64 chỉ được cross-compile; chưa chạy thử trên phần cứng ARM64.
+
+## Giao diện terminal tiếng Anh, Force quit và Retry
+
+Chạy `claude-session-sync` trong terminal hoặc `claude-session-sync interactive` để mở menu tiếng Anh. Menu có xem trước, backup + đồng bộ và hoàn tác. Kết quả tương tác hiển thị số lượng ngắn gọn, không in toàn bộ JSON.
+
+Nếu Claude còn chạy khi apply hoặc undo, app cho chọn:
+
+- **R — Retry:** bro tự đóng Claude rồi kiểm tra lại.
+- **F — Force quit:** dừng các tiến trình Claude Desktop/CLI/worker được phát hiện thuộc Linux user hiện tại, kiểm tra lại rồi tiếp tục. Thao tác có thể ngắt công việc đang chạy. App gửi TERM, đợi tối đa 6 giây, rồi chỉ KILL các tiến trình trong danh sách ban đầu vẫn còn chạy. Danh tính tiến trình được kiểm tra trước khi gửi tín hiệu; Claude mới khởi động lại sẽ không tự bị dừng.
+- **C — Cancel:** hủy thao tác, không bắt đầu đồng bộ mới.
+
+Dùng prompt tương tác với lệnh trực tiếp:
+
+```bash
+claude-session-sync sync --copy all --apply --offline --interactive
+```
+
+Hoặc chọn dừng tiến trình rõ ràng ngay từ câu lệnh:
+
+```bash
+claude-session-sync sync --copy all --apply --offline --force-quit --summary
+```
+
+`--force-quit` bắt buộc có `--apply --offline`, không dùng được với dry-run. Không chọn **F** và không truyền cờ này thì app không tự dừng tiến trình. Backup được tạo sau khi Claude đã dừng và trước khi ghi session đầu tiên. Force quit không bảo đảm Claude kịp lưu phần việc chưa được ghi xuống đĩa.
 
 ## Đăng nhập nhiều account và làm tiếp công việc
 
@@ -61,7 +85,7 @@ Hoặc cài file `*.pkg.tar.zst` đã build bằng `sudo pacman -U <file.pkg.tar
    claude-session-sync plan --from ACCOUNT_A_UUID/ORG_A_UUID --to ACCOUNT_B_UUID/ORG_B_UUID --copy all --summary
    ```
 
-4. **Quit hoàn toàn Claude Desktop và mọi Claude worker/CLI.** Đóng cửa sổ chưa chắc đã thoát. Không khởi động lại app trong lúc đang sync/undo. Công cụ kiểm tra tiến trình và từ chối ghi khi phát hiện Claude; không tự kill tiến trình.
+4. **Quit hoàn toàn Claude Desktop và mọi Claude worker/CLI.** Đóng cửa sổ chưa chắc đã thoát. Không khởi động lại app trong lúc đang sync/undo. Công cụ kiểm tra tiến trình và từ chối ghi khi Claude còn chạy. Giao diện tương tác có Force quit / Retry / Cancel; chỉ dừng tiến trình khi chọn Force quit hoặc truyền rõ `--force-quit`.
 5. Áp dụng đúng chế độ/phạm vi vừa xem:
 
    ```bash
@@ -95,7 +119,7 @@ Các lệnh khác nhận cùng hai option này. Không tự chuyển đổi layo
 
 - Chỉ thêm file còn thiếu vào các thư mục account/org đã có. File đích được xuất bản nguyên vẹn bằng hard link nguyên tử và từ chối tên đã tồn tại.
 - Bản ghi cùng tên nhưng khác nội dung được báo **conflict**, không chọn bản mới nhất theo thời gian. Một transcript được nhiều ID nội bộ trỏ tới cũng bị chặn để tránh nhân đôi.
-- Khi tiếp tục làm việc ở account B, transcript chung vẫn cập nhật; metadata riêng của account A có thể cũ. Bản 0.1.1 **không tự hòa giải metadata bị lệch**. Phải kiểm tra conflict trước khi chuyển lại. Đây không phải đồng bộ liên tục toàn trạng thái runtime.
+- Khi tiếp tục làm việc ở account B, transcript chung vẫn cập nhật; metadata riêng của account A có thể cũ. Bản 0.2.0 **không tự hòa giải metadata bị lệch**. Phải kiểm tra conflict trước khi chuyển lại. Đây không phải đồng bộ liên tục toàn trạng thái runtime.
 - Dấu `deleted_<id>` ở bất kỳ bucket nào ngăn thêm lại session có ID/alias tương ứng (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, ID tên file).
 - Không dọn/di chuyển các bản sao cũ đã tồn tại của session có tombstone, không phát tán tombstone, không sửa worktree registry.
 - Đọc toàn bộ transcript theo luồng, kể cả dòng lớn và phần lịch sử kế thừa. Session cần có đúng ID và nguồn Desktop. Nhánh chưa có lượt Desktop riêng chỉ được chấp nhận khi metadata trỏ đúng session cha đã được xác minh là Desktop, transcript chứa lịch sử Desktop của cha và cả ID của nhánh mới. Chỉ có lịch sử kế thừa không liên quan hoặc dấu nguồn CLI thì không đủ. Transcript thiếu/chưa rõ nguồn hoặc có `.desktop-released.json` sẽ bị bỏ qua; JSON bị lỗi hay lỗi đọc file sẽ dừng lập kế hoạch và báo rõ nguyên nhân.
@@ -120,7 +144,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo đưa bản ghi được thêm vào quarantine trong cùng backup, không hủy nội dung. Nếu app đã sửa bản ghi, undo từ chối để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.1.1 vẫn hỗ trợ hoàn tác backup của bản 0.1.0.
+Undo đưa bản ghi được thêm vào quarantine trong cùng backup, không hủy nội dung. Nếu app đã sửa bản ghi, undo từ chối để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.2.0 vẫn hỗ trợ hoàn tác backup của bản 0.1.0 và 0.1.1.
 
 ## Build và test
 

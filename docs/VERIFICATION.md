@@ -84,3 +84,11 @@ A child without a direct Desktop entrypoint needs its own ID in the file, an exp
 New regression tests cover both real failure patterns using synthetic data, markers after 1,500 inherited lines, lines over 1 MiB, malformed tails, FIFO transcripts, invalid fork relationships, and compatibility with older backups.
 
 **Updated real-data dry-run:** 89 records, four account/org buckets, **267 proposed additions**, zero missing/unproven transcripts, zero warnings, one fork verified through parent lineage. No live Claude metadata or transcripts were written. UI resume/new-turn validation remains outstanding.
+
+## English interactive interface and explicit process control (0.2.0)
+
+The terminal menu, prompts, errors and results are English. Running without arguments in a terminal opens the menu; `interactive` opens it explicitly. Direct commands accept `--interactive` for Force quit / Retry / Cancel prompts and concise results. `--force-quit` is an explicit non-interactive apply option and cannot run on a dry run.
+
+Process discovery is shared between the write guard and force-quit path. It checks the current UID, exact Claude executable names, and Claude app paths for Electron. It recognizes upgraded executables marked `(deleted)` and excludes this tool and unrelated Electron apps. The force-quit operation uses a fixed process snapshot and checks process start identity before signalling; on supported Linux kernels Go pins the process with a pidfd. TERM is followed by a bounded wait and KILL only for survivors from that snapshot. Newly started processes are handled by the existing guard, not killed automatically.
+
+Tests exercise Retry, Force quit, Cancel, EOF, invalid choices, failures, English menu routing, snapshot TERM/KILL escalation, non-interactive flag validation, classification, current process identity and refusal to signal a changed identity. A signal integration test only starts and terminates its own harmless `/bin/sleep` child; no real user Claude process is stopped by the automated tests. Undo remains compatible with both 0.1.0 and 0.1.1 manifests. Force quitting live Claude can interrupt work and is only performed after explicit selection or an explicit flag.

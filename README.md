@@ -4,7 +4,7 @@
 
 A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It copies missing sidebar records between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 
-**Version 0.1.1 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
+**Version 0.2.0 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
 
 ## Copy modes
 
@@ -31,6 +31,30 @@ install -m 755 claude-session-sync ~/.local/bin/claude-session-sync
 ```
 
 Alternatively, install the built `*.pkg.tar.zst` package with `sudo pacman -U <file.pkg.tar.zst>`. The ARM64 binary was cross-compiled but has not been executed on ARM64 hardware.
+
+## English terminal interface, Force quit and Retry
+
+Run `claude-session-sync` in a terminal, or use `claude-session-sync interactive`, to open the English menu. Choose a preview, backup-and-sync operation, or undo. Interactive previews and results show concise counts rather than full JSON payloads.
+
+If Claude is running when you apply a sync or undo, choose:
+
+- **R — Retry:** close Claude yourself, then check again.
+- **F — Force quit:** stop the detected Claude Desktop/CLI/worker processes belonging to your Linux user, then check again and continue. This can interrupt active work. The tool sends TERM, waits up to 6 seconds, and uses KILL only for surviving processes from the original snapshot. It rechecks process identity before signalling and does not kill newly started Claude processes automatically.
+- **C — Cancel:** leave the operation without applying a new sync.
+
+The same prompt can be used with a direct command:
+
+```bash
+claude-session-sync sync --copy all --apply --offline --interactive
+```
+
+For explicit non-interactive process termination, use:
+
+```bash
+claude-session-sync sync --copy all --apply --offline --force-quit --summary
+```
+
+`--force-quit` requires `--apply --offline`; it is rejected for dry runs. Without that flag or choosing **F**, processes are never stopped automatically. Backups are created after Claude stops, before the first session record is written. Force quitting does not guarantee that unsaved work in Claude is persisted.
 
 ## Sign in to multiple accounts and continue working
 
@@ -61,7 +85,7 @@ Alternatively, install the built `*.pkg.tar.zst` package with `sudo pacman -U <f
    claude-session-sync plan --from ACCOUNT_A_UUID/ORG_A_UUID --to ACCOUNT_B_UUID/ORG_B_UUID --copy all --summary
    ```
 
-4. **Fully quit Claude Desktop and all Claude workers/CLI processes.** Closing a window may leave the app running. Keep it stopped throughout sync/undo. The tool checks processes and refuses to write when it detects Claude; it does not kill processes automatically.
+4. **Fully quit Claude Desktop and all Claude workers/CLI processes.** Closing a window may leave the app running. Keep it stopped throughout sync/undo. The tool checks processes and refuses to write while Claude is running. The interactive interface offers Force quit / Retry / Cancel; process termination requires choosing Force quit or explicitly supplying `--force-quit`.
 5. Apply the same mode and scope you reviewed:
 
    ```bash
@@ -95,7 +119,7 @@ Other commands accept the same two options. Flatpak, Wine, Windows, macOS, SSH a
 
 - Only missing files are added to existing account/org directories. Each complete destination file is published atomically using a hard link, refusing an existing destination name.
 - Records with the same filename but different contents are reported as a **conflict**; the tool does not select the newest version by timestamp. Multiple internal IDs pointing to the same transcript are also blocked to prevent duplication.
-- Continuing work under account B updates the shared transcript, while account A's metadata may become stale. Version 0.1.1 **does not reconcile diverged metadata automatically**. Check conflicts before switching back. This is not continuous synchronization of all runtime state.
+- Continuing work under account B updates the shared transcript, while account A's metadata may become stale. Version 0.2.0 **does not reconcile diverged metadata automatically**. Check conflicts before switching back. This is not continuous synchronization of all runtime state.
 - A `deleted_<id>` marker in any bucket prevents adding a session with that ID or alias (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, or the filename ID).
 - Existing stale copies of tombstoned sessions are not cleaned up or moved. Tombstones are not propagated, and the worktree registry is not modified.
 - The complete transcript is streamed, including large lines and inherited history. A session needs a matching ID and Desktop provenance. A fork without its own Desktop turn is accepted only when its metadata points to a proven Desktop parent, its transcript contains that parent's Desktop identity, and it also contains the child's own ID. Unrelated inherited history or a CLI entrypoint is insufficient. Missing/unproven transcripts and `.desktop-released.json` sidecars cause the session to be skipped; malformed transcripts or read errors stop planning with an explicit error.
@@ -120,7 +144,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo moves added records into quarantine within the same backup, preserving their contents. If the app has modified a record, undo refuses to remove it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.1.1 also supports undoing 0.1.0 backups.
+Undo moves added records into quarantine within the same backup, preserving their contents. If the app has modified a record, undo refuses to remove it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.2.0 also supports undoing 0.1.0 and 0.1.1 backups.
 
 ## Build and test
 

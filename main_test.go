@@ -566,22 +566,26 @@ func TestFIFOTranscriptRefused(t *testing.T) {
 }
 func TestUndoPreviousVersionBackup(t *testing.T) {
 	noProcesses(t)
-	f := setup(t)
-	id, e := apply(plan(t, f, "all"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	p := filepath.Join(f.data, backupDir, id, "manifest.json")
-	b, _ := os.ReadFile(p)
-	var j Journal
-	if e = json.Unmarshal(b, &j); e != nil {
-		t.Fatal(e)
-	}
-	j.Version = "0.1.0"
-	b, _ = json.Marshal(j)
-	put(t, p, b)
-	if _, e = undo(f.data, id, true); e != nil {
-		t.Fatal("upgrade broke old backup undo", e)
+	for _, priorVersion := range []string{"0.1.0", "0.1.1"} {
+		t.Run(priorVersion, func(t *testing.T) {
+			f := setup(t)
+			id, e := apply(plan(t, f, "all"))
+			if e != nil {
+				t.Fatal(e)
+			}
+			p := filepath.Join(f.data, backupDir, id, "manifest.json")
+			b, _ := os.ReadFile(p)
+			var j Journal
+			if e = json.Unmarshal(b, &j); e != nil {
+				t.Fatal(e)
+			}
+			j.Version = priorVersion
+			b, _ = json.Marshal(j)
+			put(t, p, b)
+			if _, e = undo(f.data, id, true); e != nil {
+				t.Fatal("upgrade broke old backup undo", e)
+			}
+		})
 	}
 }
 

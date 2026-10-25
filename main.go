@@ -18,13 +18,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-const version = "0.1.1"
+const version = "0.2.0"
 
 var guard = processGuard
 
@@ -751,48 +750,6 @@ func discover(explicit string) (string, error) {
 	}
 	panic("unreachable")
 }
-func processGuard() error {
-	entries, e := os.ReadDir("/proc")
-	if e != nil {
-		return e
-	}
-	for _, p := range entries {
-		pid, e := strconv.Atoi(p.Name())
-		if e != nil || pid == os.Getpid() {
-			continue
-		}
-		base := filepath.Join("/proc", p.Name())
-		st, e := os.Stat(base)
-		if e != nil {
-			continue
-		}
-		sys, ok := st.Sys().(*syscall.Stat_t)
-		if !ok || sys.Uid != uint32(os.Getuid()) {
-			continue
-		}
-		exe, e := os.Readlink(filepath.Join(base, "exe"))
-		if e != nil {
-			if errors.Is(e, fs.ErrNotExist) {
-				continue
-			}
-			return fmt.Errorf("cannot inspect process %d: %w", pid, e)
-		}
-		name := strings.ToLower(filepath.Base(exe))
-		if name == "claude" || strings.Contains(name, "claude-desktop") || strings.Contains(name, "claude_code") {
-			return fmt.Errorf("Claude process %d is still running; fully quit Desktop and its workers", pid)
-		}
-		if strings.Contains(name, "electron") {
-			b, e := os.ReadFile(filepath.Join(base, "cmdline"))
-			if e != nil {
-				return e
-			}
-			if bytes.Contains(bytes.ToLower(b), []byte("claude")) {
-				return fmt.Errorf("Claude Electron process %d is running", pid)
-			}
-		}
-	}
-	return nil
-}
 func durableDir(r *os.Root, p string) error {
 	f, e := r.Open(p)
 	if e != nil {
@@ -948,7 +905,7 @@ func undo(data, id string, apply bool) ([]string, error) {
 	if e = decode(b, &j); e != nil {
 		return nil, e
 	}
-	if j.Version != "0.1.0" && j.Version != version {
+	if j.Version != "0.1.0" && j.Version != "0.1.1" && j.Version != version {
 		return nil, errors.New("unsupported manifest version")
 	}
 	moves := []string{}
@@ -1010,8 +967,14 @@ func undo(data, id string, apply bool) ([]string, error) {
 	return moves, nil
 }
 func run(args []string) error {
+	if len(args) == 0 && terminalInput() {
+		return interactiveMenu(consoleInput, os.Stdout, run)
+	}
+	if len(args) == 1 && args[0] == "interactive" {
+		return interactiveMenu(consoleInput, os.Stdout, run)
+	}
 	if len(args) == 0 {
-		fmt.Println("Claude Desktop session sync " + version + " (Linux)\nCommands: doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
+		fmt.Println("Claude Desktop session sync " + version + " (Linux)\nCommands: interactive, doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
 		return nil
 	}
 	cmd := args[0]
@@ -1032,6 +995,8 @@ func run(args []string) error {
 	offline := f.Bool("offline", false, "confirm Desktop and all Claude workers stay stopped throughout")
 	backup := f.String("backup", "", "backup ID for undo")
 	mode := f.String("copy", "all", "all: exact session record with configuration and embedded secrets; chat: history pointers only")
+	interactive := f.Bool("interactive", false, "show English Force quit / Retry / Cancel options when Claude blocks a write")
+	force := f.Bool("force-quit", false, "explicitly stop detected Claude processes before applying; active work may be interrupted")
 	summary := f.Bool("summary", false, "omit payloads from output")
 	if e := f.Parse(args[1:]); e != nil {
 		return e
@@ -1051,14 +1016,34 @@ func run(args []string) error {
 	if *mode != "all" && *mode != "chat" {
 		return errors.New("--copy must be all or chat")
 	}
+	if *force && !*write {
+		return errors.New("--force-quit requires --apply --offline")
+	}
 	d, e := discover(*data)
 	if e != nil {
 		return e
+	}
+	if *write {
+		if *force {
+			fmt.Fprintln(os.Stderr, "Stopping detected Claude processes...")
+			if e := forceQuitClaude(); e != nil {
+				return e
+			}
+		}
+		if *interactive {
+			if e := waitForClaude(consoleInput, os.Stdout, guard, forceQuitClaude); e != nil {
+				return e
+			}
+		}
 	}
 	if cmd == "undo" {
 		m, e := undo(d, *backup, *write)
 		if e != nil {
 			return e
+		}
+		if *interactive {
+			fmt.Fprintf(os.Stdout, "Undo complete. Records moved to quarantine: %d\n", len(m))
+			return nil
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"apply": *write, "quarantine": m})
 	}
@@ -1090,6 +1075,17 @@ func run(args []string) error {
 		if e != nil {
 			return e
 		}
+	}
+	if *interactive {
+		label := "Dry run complete. Planned additions"
+		if *write {
+			label = "Synchronization complete. Added records"
+		}
+		fmt.Fprintf(os.Stdout, "%s: %d. Session records: %d. Skipped/unproven transcripts: %d.\n", label, len(rep.Actions), rep.Records, rep.MissingTranscripts)
+		for _, w := range rep.Warnings {
+			fmt.Fprintln(os.Stdout, "Warning:", w)
+		}
+		return nil
 	}
 	if *summary || cmd == "doctor" {
 		for i := range rep.Actions {

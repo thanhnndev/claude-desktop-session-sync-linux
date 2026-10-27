@@ -370,7 +370,7 @@ func undo(data, id string, write bool) ([]string, error) {
 		return nil, e
 	}
 	switch j.Version {
-	case "0.1.0", "0.1.1", "0.2.0", "0.3.0", version:
+	case "0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", version:
 	default:
 		return nil, errors.New("unsupported manifest version")
 	}

@@ -4,7 +4,7 @@
 
 A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It synchronizes sidebar records in both directions between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 
-**Version 0.3.1 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
+**Version 0.3.2 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
 
 ## Copy modes
 
@@ -126,6 +126,7 @@ The default sync considers **every existing account/org bucket as both a source 
 - Message files under the shared local projects directory are **never overwritten, rewritten or merged**. Accounts use the same on-disk transcripts. Updating the sidebar record makes an account point to the current transcript, including after its CLI ID advances. All previous transcript files remain intact.
 - Deletion markers are propagated to destination buckets. Every matching stale session record is moved out of the active session list with its complete bytes retained in backup/quarantine. Markers match filename IDs, `cliSessionId`, `unarchivedCliSessionId` and `priorCliSessionIds`, so deleted sessions do not reappear.
 - Multiple distinct internal session IDs pointing to the same transcript are still reported rather than silently merged. Corrupt records are not spread. A complete transcript scan or verified Desktop parent lineage is required; missing/unproven transcripts and `.desktop-released.json` sidecars are skipped. Read errors and malformed transcripts stop planning explicitly.
+- A transcript ID can appear in multiple project/worktree directories. Metadata-only copies do not block a proven Desktop history. Identical proven files are accepted; different proven histories are reported and only the affected session is skipped. Provenance is checked per file, never combined across copies. A release sidecar beside any copy blocks that session. Files are never moved, merged or deleted to resolve duplicates.
 - Desktop transcripts without a sidebar pointer are listed for investigation. The tool does not invent IDs, rebuild worktree leases or modify the worktree registry.
 
 Run sync again before switching back after working in another account. This is an offline operation, not a watcher while Claude is running. The terminal menu offers Force quit / Retry / Cancel. Cross-account continuation in the Desktop UI remains to be checked on the installed app version.
@@ -147,7 +148,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo restores previous record versions, restores records quarantined by sync, and reverses propagated markers/additions. Applied versions are retained in the backup's `undone` quarantine. If the app has modified a target since sync, undo refuses to overwrite it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.3.1 also supports undoing 0.1.0, 0.1.1, 0.2.0 and 0.3.0 backups.
+Undo restores previous record versions, restores records quarantined by sync, and reverses propagated markers/additions. Applied versions are retained in the backup's `undone` quarantine. If the app has modified a target since sync, undo refuses to overwrite it so those changes are retained. Do not run it while the app or another user is editing the data. Backups are not deleted automatically. Version 0.3.2 also supports undoing 0.1.0, 0.1.1, 0.2.0, 0.3.0 and 0.3.1 backups.
 
 ## Build and test
 

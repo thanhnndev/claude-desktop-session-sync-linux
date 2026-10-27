@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-const version = "0.3.1"
+const version = "0.3.2"
 
 var guard = processGuard
 
@@ -376,6 +376,7 @@ func list(r *os.Root, p string) ([]fs.DirEntry, error) {
 // Record only identity/provenance fields while streaming the complete JSONL file.
 type Transcript struct {
 	Path             string
+	SHA256           string
 	SessionIDs       map[string]bool
 	DesktopIDs       map[string]bool
 	OtherEntrypoints map[string]bool
@@ -383,7 +384,8 @@ type Transcript struct {
 
 func inspectTranscript(h io.Reader, path string) (Transcript, error) {
 	tr := Transcript{Path: path, SessionIDs: map[string]bool{}, DesktopIDs: map[string]bool{}, OtherEntrypoints: map[string]bool{}}
-	rd := bufio.NewReader(h)
+	hash := sha256.New()
+	rd := bufio.NewReader(io.TeeReader(h, hash))
 	for line := 1; ; line++ {
 		b, e := rd.ReadBytes('\n')
 		if e != nil && e != io.EOF {
@@ -407,18 +409,19 @@ func inspectTranscript(h io.Reader, path string) (Transcript, error) {
 			}
 		}
 		if e == io.EOF {
+			tr.SHA256 = hex.EncodeToString(hash.Sum(nil))
 			return tr, nil
 		}
 	}
 }
-func transcriptIndex(p string) (map[string]Transcript, []string, error) {
+func transcriptIndex(p string) (map[string][]Transcript, []string, error) {
 	r, e := realRoot(p)
 	if e != nil {
 		return nil, nil, e
 	}
 	defer r.Close()
-	idx := map[string]Transcript{}
-	desktop := []string{}
+	idx := map[string][]Transcript{}
+	desktopIDs := map[string]bool{}
 	dirs, e := list(r, ".")
 	if e != nil {
 		return nil, nil, e
@@ -465,14 +468,15 @@ func transcriptIndex(p string) (map[string]Transcript, []string, error) {
 			if closeErr != nil {
 				return nil, nil, closeErr
 			}
-			if _, ok := idx[id]; ok {
-				return nil, nil, fmt.Errorf("ambiguous transcript ID %s", id)
-			}
-			idx[id] = tr
+			idx[id] = append(idx[id], tr)
 			if tr.DesktopIDs[id] && !tr.OtherEntrypoints[id] {
-				desktop = append(desktop, id)
+				desktopIDs[id] = true
 			}
 		}
+	}
+	desktop := []string{}
+	for id := range desktopIDs {
+		desktop = append(desktop, id)
 	}
 	sort.Strings(desktop)
 	return idx, desktop, nil
@@ -487,10 +491,30 @@ func transcriptID(rec Record) string {
 // A bare Desktop marker from an unrelated inherited session is insufficient.
 // Forks need a real parent pointer, a proven Desktop parent, inherited parent
 // identity in the child's transcript, and a row carrying the child's own ID.
-func transcriptProof(rec Record, index map[string]Transcript, parents map[string][]Record, visiting map[string]bool) string {
+// Evaluate each file separately: worktree metadata stubs are not conversation
+// histories, and provenance from separate files must never be combined.
+// Distinct proven histories are ambiguous even when one is newer or longer.
+func resolveTranscript(rec Record, index map[string][]Transcript, parents map[string][]Record, visiting map[string]bool) (Transcript, string, error) {
+	var selected Transcript
+	proof := ""
+	for _, tr := range index[transcriptID(rec)] {
+		p := transcriptProof(rec, tr, index, parents, visiting)
+		if p == "" {
+			continue
+		}
+		if proof != "" && selected.SHA256 != tr.SHA256 {
+			return Transcript{}, "", fmt.Errorf("Conflicting Desktop histories for transcript ID %s; session skipped (%s, %s)", transcriptID(rec), selected.Path, tr.Path)
+		}
+		if proof == "" {
+			selected, proof = tr, p
+		}
+	}
+	return selected, proof, nil
+}
+
+func transcriptProof(rec Record, tr Transcript, index map[string][]Transcript, parents map[string][]Record, visiting map[string]bool) string {
 	sid := transcriptID(rec)
-	tr, ok := index[sid]
-	if !ok || !tr.SessionIDs[sid] || tr.OtherEntrypoints[sid] {
+	if !tr.SessionIDs[sid] || tr.OtherEntrypoints[sid] {
 		return ""
 	}
 	if tr.DesktopIDs[sid] {
@@ -509,7 +533,8 @@ func transcriptProof(rec Record, index map[string]Transcript, parents map[string
 	}
 	visiting[rec.Name] = true
 	defer delete(visiting, rec.Name)
-	if transcriptProof(parent, index, parents, visiting) == "" {
+	_, parentProof, parentErr := resolveTranscript(parent, index, parents, visiting)
+	if parentErr != nil || parentProof == "" {
 		return ""
 	}
 	for _, alias := range parent.IDs {
@@ -699,7 +724,12 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			continue
 		}
 		sid := transcriptID(first)
-		proof := transcriptProof(first, transcripts, parents, map[string]bool{})
+		_, proof, resolveErr := resolveTranscript(first, transcripts, parents, map[string]bool{})
+		if resolveErr != nil {
+			rep.MissingTranscripts++
+			rep.Warnings = append(rep.Warnings, resolveErr.Error()+": "+name)
+			continue
+		}
 		if proof == "" {
 			rep.MissingTranscripts++
 			rep.Warnings = append(rep.Warnings, "No proven Desktop transcript; skipped: "+name)
@@ -708,20 +738,27 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 		if proof == "fork" {
 			rep.LineageVerified = append(rep.LineageVerified, first.Name)
 		}
-		tp := transcripts[sid].Path
-		// A release sidecar means the transcript was explicitly released/deleted.
+		// A release sidecar beside any copy (including a metadata-only stub)
+		// means the transcript was explicitly released/deleted.
 		tr, e := realRoot(projects)
 		if e != nil {
 			return rep, e
 		}
-		_, released := tr.Lstat(strings.TrimSuffix(tp, ".jsonl") + ".desktop-released.json")
+		released := false
+		for _, candidate := range transcripts[sid] {
+			sidecar := strings.TrimSuffix(candidate.Path, ".jsonl") + ".desktop-released.json"
+			_, statErr := tr.Lstat(sidecar)
+			if statErr == nil {
+				released = true
+			} else if !errors.Is(statErr, fs.ErrNotExist) {
+				tr.Close()
+				return rep, statErr
+			}
+		}
 		tr.Close()
-		if released == nil {
+		if released {
 			rep.Warnings = append(rep.Warnings, "Released transcript; skipped: "+name)
 			continue
-		}
-		if !errors.Is(released, fs.ErrNotExist) {
-			return rep, released
 		}
 		for _, bucket := range rep.Buckets {
 			if target != "" && bucket != target {

@@ -4,7 +4,7 @@
 
 Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ hai chiều các bản ghi sidebar giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
 
-**Trạng thái 0.3.1:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
+**Trạng thái 0.3.2:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
 
 ## Hai lựa chọn sao chép
 
@@ -147,7 +147,7 @@ claude-session-sync undo --backup BACKUP_ID
 claude-session-sync undo --backup BACKUP_ID --apply --offline
 ```
 
-Undo phục hồi phiên bản trước, khôi phục bản ghi đã được sync đưa vào quarantine và đảo ngược các dấu xóa/bản ghi mới được thêm. Phiên bản đã áp dụng vẫn còn trong thư mục `undone` của backup. Nếu app đã sửa bản ghi sau sync, undo từ chối ghi đè để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.3.1 vẫn hỗ trợ hoàn tác backup của bản 0.1.0, 0.1.1, 0.2.0 và 0.3.0.
+Undo phục hồi phiên bản trước, khôi phục bản ghi đã được sync đưa vào quarantine và đảo ngược các dấu xóa/bản ghi mới được thêm. Phiên bản đã áp dụng vẫn còn trong thư mục `undone` của backup. Nếu app đã sửa bản ghi sau sync, undo từ chối ghi đè để không mất thay đổi mới. Không chạy cùng lúc với app hoặc người dùng khác sửa dữ liệu. Không tự xóa backup. Bản 0.3.2 vẫn hỗ trợ hoàn tác backup của bản 0.1.0, 0.1.1, 0.2.0, 0.3.0 và 0.3.1.
 
 ## Build và test
 
@@ -162,3 +162,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o cla
 Đóng gói Arch từ source: `makepkg --nodeps`. Cần `makepkg`, `fakeroot`, Go; `--nodeps` chỉ phù hợp khi công cụ build đã được cài (ví dụ Go qua mise). Không chạy bằng root.
 
 Nguồn tham khảo: [repo Windows gốc](https://github.com/realperest/claude-desktop-session-sync), [issue #74662](https://github.com/anthropics/claude-code/issues/74662). Đây là triển khai Go độc lập, không phải script PowerShell đổi tên; không liên kết với Anthropic.
+
+## Transcript trùng ID trong worktree
+
+Cùng transcript ID có thể có một file lịch sử Desktop và các file phụ chỉ chứa metadata ở những thư mục khác. Bản 0.3.2 xác minh từng file riêng và không để file phụ chặn đồng bộ. Các bản lịch sử giống hệt nhau được chấp nhận; các lịch sử đầy đủ khác nhau được báo xung đột và chỉ bỏ qua session liên quan. Sidecar release ở cạnh bất kỳ bản nào đều chặn session. Không di chuyển, gộp hay xóa transcript.

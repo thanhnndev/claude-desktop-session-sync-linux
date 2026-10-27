@@ -576,7 +576,7 @@ func TestFIFOTranscriptRefused(t *testing.T) {
 }
 func TestUndoPreviousVersionBackup(t *testing.T) {
 	noProcesses(t)
-	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0", "0.3.0"} {
+	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1"} {
 		t.Run(priorVersion, func(t *testing.T) {
 			f := setup(t)
 			id, e := apply(plan(t, f, "all"))

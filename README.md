@@ -1,6 +1,8 @@
 # Claude Desktop Session Sync — Linux
 
 **English** | [Tiếng Việt](README_VI.md)
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
+
 
 A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It synchronizes sidebar records in both directions between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 

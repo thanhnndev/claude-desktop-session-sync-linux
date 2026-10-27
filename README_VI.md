@@ -1,6 +1,8 @@
 # Claude Desktop Session Sync — Linux
 
 [English](README.md) | **Tiếng Việt**
+[Lịch sử thay đổi](CHANGELOG.md) · [Các bản phát hành](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
+
 
 Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ hai chiều các bản ghi sidebar giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
 

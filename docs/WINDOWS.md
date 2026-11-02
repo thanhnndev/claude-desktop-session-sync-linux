@@ -3,7 +3,7 @@
 Runs natively on Windows 10/11 amd64; WSL is not required. This synchronizes local
 Claude Desktop Code session records between existing accounts/organizations in
 the same Windows profile. It does not move sessions between Windows and WSL,
-translate paths, or import SSH/WSL sessions.
+translate paths, or import SSH sessions. Windows-created WSL sessions are supported when their transcript exists with verified Desktop provenance in the Windows projects store. Their WSL distro and POSIX paths are preserved in both copy modes.
 
 ## Install and run
 
@@ -92,3 +92,25 @@ bucket and 3 unsupported records. Both modes replayed
 5 additions on the disposable copy and undid exactly. The live app had 12 Claude
 processes; writes were refused. Live cross-account UI continuation cannot be
 verified with only one account bucket and remains unverified.
+
+## Saved Code projects (0.5.0)
+
+`--copy all` also merges `ccd-session-presets.json` across existing `byAccount`
+identities, including accounts without a session bucket yet. Full preset targets
+(local/WSL), names, settings and worktree options are preserved. The newest
+version of a preset ID wins by updatedAt/lastUsedAt/createdAt; equal-time
+conflicts and different IDs for the same target folder are retained with a warning.
+Explicit --from/--to bucket selectors also scope project synchronization by account.
+Destination built-ins, seeded flags and unrelated registry fields stay intact.
+`--copy chat` only synchronizes session history pointers.
+
+Project-registry replacements share the same lock, stale-plan checks, complete
+write-ahead backup and exact undo as session changes. Concurrent edits block undo.
+The registry stores references to existing folders; source trees are shared on the
+same machine and are never copied. Missing WSL transcripts are skipped rather than
+invented, and SSH session history remains unsupported.
+
+On 2026-11-02 the updated live preview recognized 13 records across two buckets,
+planned 3 WSL additions, 3 updates and 1 saved-project addition with zero skipped
+records. An opt-in copy test replayed the actual saved-project registry, verified
+idempotence and exact undo, and confirmed the live registry did not change.

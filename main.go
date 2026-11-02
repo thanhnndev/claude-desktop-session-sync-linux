@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	posixpath "path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -23,7 +24,7 @@ import (
 	"time"
 )
 
-const version = "0.4.1"
+const version = "0.5.0"
 
 var guard = processGuard
 
@@ -56,6 +57,8 @@ type Action struct {
 	Payload          json.RawMessage `json:"payload"`
 }
 type Report struct {
+	ProjectsAdded      int      `json:"projects_added"`
+	ProjectsUpdated    int      `json:"projects_updated"`
 	SourceBucket       string   `json:"source_bucket,omitempty"`
 	TargetBucket       string   `json:"target_bucket,omitempty"`
 	Added              int      `json:"added"`
@@ -257,8 +260,25 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 	if !uuid.MatchString(str(d, "cliSessionId")) && !uuid.MatchString(str(d, "unarchivedCliSessionId")) {
 		return r, errors.New("no valid transcript ID")
 	}
+	wsl := false
+	if raw, exists := d["wslConfig"]; exists && raw != nil && runtime.GOOS == "windows" {
+		config, ok := raw.(map[string]any)
+		if !ok || strings.TrimSpace(str(config, "distro")) == "" {
+			return r, errors.New("invalid WSL distro configuration")
+		}
+		wsl = true
+	}
+	absolutePath := func(p string) bool {
+		if wsl {
+			return posixpath.IsAbs(p)
+		}
+		return filepath.IsAbs(p)
+	}
 	for _, k := range []string{"sshConfig", "wslConfig", "remoteHost", "remoteHostId"} {
 		if v, ok := d[k]; ok && v != nil {
+			if k == "wslConfig" && wsl {
+				continue
+			}
 			kind := "remote"
 			if k == "wslConfig" {
 				kind = "WSL"
@@ -269,7 +289,7 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 			return r, fmt.Errorf("%w: %s sessions are not supported; only local Desktop sessions are synchronized", errUnsupportedSession, kind)
 		}
 	}
-	if !filepath.IsAbs(str(d, "cwd")) {
+	if !absolutePath(str(d, "cwd")) {
 		return r, errors.New("cwd must be absolute for this operating system")
 	}
 	r.Parent = str(d, "forkedFromSessionId")
@@ -306,6 +326,9 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 		if v, ok := d[k]; ok {
 			clean[k] = v
 		}
+	}
+	if wsl {
+		clean["wslConfig"] = d["wslConfig"]
 	}
 	for _, k := range []string{"originCwd", "gitAnchorsFolderRealpath", "title", "titleSource", "model", "effort"} {
 		if v, ok := clean[k]; ok {
@@ -347,7 +370,7 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 			for _, k := range []string{"gitRoot", "commonDir", "gitDir"} {
 				if v, ok := m[k]; ok {
 					s, ok := v.(string)
-					if !ok || !filepath.IsAbs(s) {
+					if !ok || !absolutePath(s) {
 						return r, errors.New("invalid anchor path")
 					}
 					c[k] = s
@@ -813,6 +836,11 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			rep.Actions = append(rep.Actions, action)
 		}
 	}
+	if mode == "all" {
+		if e := appendProjectActions(&rep, r, source, target); e != nil {
+			return rep, e
+		}
+	}
 	appendTombstoneActions(&rep, markers, target)
 	sort.SliceStable(rep.Actions, func(i, j int) bool {
 		rank := func(k string) int {
@@ -1036,6 +1064,7 @@ func run(args []string) error {
 			label = "Synchronization complete"
 		}
 		fmt.Fprintf(os.Stdout, "%s. Added: %d. Updated: %d. Quarantined: %d. Deletion markers: %d. Session records: %d. Skipped/unproven: %d (unsupported: %d; invalid: %d; missing/unproven transcripts: %d).\n", label, rep.Added, rep.Updated, rep.Quarantined, rep.Tombstones, rep.Records, rep.MissingTranscripts+rep.UnsupportedRecords+rep.InvalidRecords, rep.UnsupportedRecords, rep.InvalidRecords, rep.MissingTranscripts)
+		fmt.Fprintf(os.Stdout, "Saved projects. Added: %d. Updated: %d.\n", rep.ProjectsAdded, rep.ProjectsUpdated)
 		for _, w := range rep.Warnings {
 			fmt.Fprintln(os.Stdout, "Warning:", w)
 		}

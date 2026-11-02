@@ -63,8 +63,8 @@ func waitForClaude(in *bufio.Reader, out io.Writer, check func() error, quit fun
 func interactiveMenu(in *bufio.Reader, out io.Writer, execute func([]string) error) error {
 	for {
 		fmt.Fprintln(out, "\nClaude Desktop Session Sync "+version+" — "+runtime.GOOS)
-		fmt.Fprintln(out, "[1] Preview synchronization — all session configuration")
-		fmt.Fprintln(out, "[2] Back up and synchronize — all session configuration")
+		fmt.Fprintln(out, "[1] Preview synchronization — sessions and saved projects")
+		fmt.Fprintln(out, "[2] Back up and synchronize — sessions and saved projects")
 		fmt.Fprintln(out, "[3] Preview synchronization — chat history only")
 		fmt.Fprintln(out, "[4] Back up and synchronize — chat history only")
 		fmt.Fprintln(out, "[5] Undo a synchronization backup")

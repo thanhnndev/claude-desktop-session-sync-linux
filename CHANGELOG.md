@@ -2,6 +2,13 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.5.0] — Unreleased
+
+- Synchronize saved Code projects in all mode, preserving local/WSL folder targets, names and complete settings across existing accounts. Merge newest preset versions and report unresolved conflicts without overwriting unrelated account metadata.
+- Include project registry updates in stale-plan validation, write-ahead backups and exact undo.
+- Support Windows-created WSL session metadata using existing verified Desktop transcripts; retain WSL transport and POSIX paths in both copy modes without copying source trees.
+- Validate on real Windows data copies: saved-project merge, idempotence, exact undo and unchanged live registry; Linux regression tests also pass.
+
 ## [0.4.1] — Unreleased
 
 - Classify WSL/SSH/remote records as unsupported rather than corrupt, checking transport before host-specific cwd validation.

@@ -2,7 +2,7 @@
 
 ## Windows support
 
-Version 0.4.0 also builds and runs natively on Windows amd64. See [Windows installation, discovery, safety and validation](docs/WINDOWS.md). Windows/WSL session paths are not converted.
+Version 0.4.0 also builds and runs natively on Windows amd64. See [Windows installation, discovery, safety and validation](docs/WINDOWS.md). Windows-created WSL session records retain their distro and Linux paths; transcripts must be proven in the Windows Desktop projects store. Source trees are not copied or converted.
 
 **English** | [Tiếng Việt](README_VI.md)
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
@@ -21,7 +21,7 @@ A command-line tool for **local sessions created in the Code tab of Claude Deskt
 
 `all` preserves **session configuration**. The tool does not read, transfer or swap Claude login cookies, keyring entries, browser profiles, `~/.claude/.credentials.json` or account tokens. Sign in and switch accounts inside Claude Desktop. MCP connections using the target account's OAuth may require signing in again.
 
-The scope of `all` is the contents of `local_*.json`, **not the entire Claude profile**. Global settings and account-specific saved environments (`ccd-session-presets.json`, `mcp-user-tool-toggles.json`, extensions, settings/hooks) are not merged. References stored in the session are preserved; references to configuration belonging to the original account have not been verified under another account. There is no implicit filtering in `all`.
+The scope of `all` includes complete `local_*.json` records and saved Code projects in `ccd-session-presets.json`. Saved projects are merged between existing accounts with their complete folder/WSL target and settings; existing account built-ins and unrelated root fields are retained. This is **not the entire Claude profile**: `mcp-user-tool-toggles.json`, extensions and global settings/hooks are not merged. References stored in the session are preserved; references to configuration belonging to the original account have not been verified under another account. There is no implicit filtering in `all`.
 
 ## Install on CachyOS/Arch
 

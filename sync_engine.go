@@ -311,6 +311,9 @@ func apply(rep Report) (string, error) {
 	return id, nil
 }
 func validJournalAction(a StoredAction) error {
+	if a.Target == presetsFile || a.Kind == "projects" {
+		return validProjectJournal(a)
+	}
 	parts := strings.Split(filepath.ToSlash(a.Target), "/")
 	if len(parts) != 4 || parts[0] != "claude-code-sessions" || !uuid.MatchString(parts[1]) || !uuid.MatchString(parts[2]) {
 		return errors.New("invalid manifest target")
@@ -373,7 +376,7 @@ func undo(data, id string, write bool) ([]string, error) {
 		return nil, e
 	}
 	switch j.Version {
-	case "0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", "0.3.2", "0.4.0", version:
+	case "0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", "0.3.2", "0.4.0", "0.4.1", version:
 	default:
 		return nil, errors.New("unsupported manifest version")
 	}

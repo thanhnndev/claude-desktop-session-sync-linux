@@ -2,7 +2,7 @@
 
 ## Hỗ trợ Windows
 
-Bản 0.4.0 chạy native trên Windows amd64. Xem [hướng dẫn cài đặt và kiểm chứng Windows](docs/WINDOWS.md). Không chuyển đổi session giữa Windows và WSL.
+Bản 0.4.0 chạy native trên Windows amd64. Xem [hướng dẫn cài đặt và kiểm chứng Windows](docs/WINDOWS.md). Giữ nguyên distro và đường dẫn Linux của session WSL tạo bởi Windows Desktop; transcript phải được chứng minh trong kho Desktop trên Windows. Chế độ `all` đồng bộ cả dự án đã lưu trong `ccd-session-presets.json`, gồm thư mục và cấu hình đầy đủ.
 
 [English](README.md) | **Tiếng Việt**
 [Lịch sử thay đổi](CHANGELOG.md) · [Các bản phát hành](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)

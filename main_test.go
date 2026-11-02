@@ -235,19 +235,29 @@ func TestCorruptRecordBlocksName(t *testing.T) {
 	}
 }
 
-func TestWSLSessionsReportedAsUnsupported(t *testing.T) {
+func TestWSLSessionsKeepTransportOnWindows(t *testing.T) {
 	f := setup(t)
 	d := object(t, f.record)
 	d["cwd"] = "/home/test/project"
 	d["wslConfig"] = map[string]any{"distro": "archlinux"}
+	d["gitAnchors"] = []any{map[string]any{"gitRoot": "/home/test/project", "commonDir": "/home/test/project/.git"}}
 	save(t, f.record, d)
 	for _, mode := range []string{"all", "chat"} {
-		r := plan(t, f, mode)
-		if r.UnsupportedRecords != 1 || r.InvalidRecords != 0 || len(r.Actions) != 0 {
-			t.Fatalf("WSL classification: unsupported=%d invalid=%d actions=%d", r.UnsupportedRecords, r.InvalidRecords, len(r.Actions))
+		rep := plan(t, f, mode)
+		if runtime.GOOS != "windows" {
+			if rep.UnsupportedRecords != 1 || len(rep.Actions) != 0 {
+				t.Fatal("Linux accepted WSL transport")
+			}
+			continue
 		}
-		if len(r.Warnings) == 0 || !strings.Contains(r.Warnings[0], "WSL sessions are not supported") {
-			t.Fatal("missing actionable WSL diagnostic")
+		if rep.UnsupportedRecords != 0 || len(rep.Actions) != 1 {
+			t.Fatalf("Windows WSL session rejected: %v", rep.Warnings)
+		}
+		var payload map[string]any
+		json.Unmarshal(rep.Actions[0].Payload, &payload)
+		config, ok := payload["wslConfig"].(map[string]any)
+		if !ok || config["distro"] != "archlinux" || payload["cwd"] != "/home/test/project" {
+			t.Fatal("WSL identity/path lost")
 		}
 	}
 }

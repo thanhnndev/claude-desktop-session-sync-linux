@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -76,8 +77,8 @@ func TestWindowsLiveDataCopyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(initial.Buckets) != 1 {
-		t.Skip("this integration expects exactly one live bucket")
+	if len(initial.Buckets) == 0 {
+		t.Fatal("no live account bucket")
 	}
 	target := filepath.Join(accountB, org)
 	if err := os.MkdirAll(filepath.Join(copyData, "claude-code-sessions", target), 0700); err != nil {
@@ -127,4 +128,66 @@ func TestWindowsLiveDataCopyRoundTrip(t *testing.T) {
 		t.Fatal("live profile changed during integration test")
 	}
 	t.Log("live session and transcript hashes unchanged")
+}
+
+func TestWindowsLiveSavedProjectsCopyRoundTrip(t *testing.T) {
+	if os.Getenv("CLAUDE_SYNC_TEST_LIVE_COPY") != "1" {
+		t.Skip("opt-in live-copy integration")
+	}
+	data, err := discover("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	livePath := filepath.Join(data, presetsFile)
+	original, err := os.ReadFile(livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := setup(t)
+	if err := secureDirectory(filepath.Dir(f.data)); err != nil {
+		t.Fatal(err)
+	}
+	doc, accounts, err := presetAccounts(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := accounts[accountB]; exists {
+		t.Fatal("synthetic project account collides with live identity")
+	}
+	accounts[accountB] = map[string]any{"presets": []any{}}
+	copyOriginal, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	put(t, filepath.Join(f.data, presetsFile), copyOriginal)
+	noProcesses(t)
+	rep := plan(t, f, "all")
+	if rep.ProjectsAdded == 0 {
+		t.Fatal("no real saved projects to replay")
+	}
+	id, err := apply(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next := plan(t, f, "all"); len(next.Actions) != 0 {
+		t.Fatal("saved project replay not idempotent")
+	}
+	if _, err := undo(f.data, id, true); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(filepath.Join(f.data, presetsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(copyOriginal) {
+		t.Fatal("project registry undo not exact")
+	}
+	after, err := os.ReadFile(livePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatal("live project registry changed")
+	}
+	t.Logf("real saved projects replayed=%d; exact undo; live registry unchanged", rep.ProjectsAdded)
 }

@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 // An offline, bidirectional synchronizer for Claude Desktop Code metadata.
 package main
@@ -15,17 +15,20 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	posixpath "path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
-const version = "0.3.2"
+const version = "0.5.0"
 
 var guard = processGuard
+
+var errUnsupportedSession = errors.New("unsupported session")
 
 const backupDir = ".linux-session-sync-backups"
 
@@ -54,6 +57,8 @@ type Action struct {
 	Payload          json.RawMessage `json:"payload"`
 }
 type Report struct {
+	ProjectsAdded      int      `json:"projects_added"`
+	ProjectsUpdated    int      `json:"projects_updated"`
 	SourceBucket       string   `json:"source_bucket,omitempty"`
 	TargetBucket       string   `json:"target_bucket,omitempty"`
 	Added              int      `json:"added"`
@@ -73,6 +78,8 @@ type Report struct {
 	Warnings           []string `json:"warnings"`
 	Orphans            []string `json:"desktop_transcripts_without_pointer"`
 	MissingTranscripts int      `json:"missing_transcripts"`
+	UnsupportedRecords int      `json:"unsupported_records"`
+	InvalidRecords     int      `json:"invalid_records"`
 }
 type StoredAction struct {
 	Kind             string `json:"kind,omitempty"`
@@ -106,14 +113,15 @@ func realRoot(p string) (*os.Root, error) {
 		return nil, err
 	}
 	// Refuse every symlink component, including the supplied root.
-	cur := string(filepath.Separator)
-	for _, part := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+	volume := filepath.VolumeName(p)
+	cur := volume + string(filepath.Separator)
+	for _, part := range strings.Split(strings.TrimPrefix(p[len(volume):], string(filepath.Separator)), string(filepath.Separator)) {
 		cur = filepath.Join(cur, part)
 		i, e := os.Lstat(cur)
 		if e != nil {
 			return nil, e
 		}
-		if i.Mode()&os.ModeSymlink != 0 {
+		if unsafeLink(i) {
 			return nil, fmt.Errorf("symlink refused: %s", cur)
 		}
 	}
@@ -133,7 +141,7 @@ func safe(r *os.Root, p string, missing bool) error {
 		if e != nil {
 			return e
 		}
-		if i.Mode()&os.ModeSymlink != 0 {
+		if unsafeLink(i) {
 			return fmt.Errorf("symlink refused: %s", cur)
 		}
 		if cur != p && !i.IsDir() {
@@ -252,13 +260,37 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 	if !uuid.MatchString(str(d, "cliSessionId")) && !uuid.MatchString(str(d, "unarchivedCliSessionId")) {
 		return r, errors.New("no valid transcript ID")
 	}
-	if !filepath.IsAbs(str(d, "cwd")) {
-		return r, errors.New("cwd must be absolute")
+	wsl := false
+	if raw, exists := d["wslConfig"]; exists && raw != nil && runtime.GOOS == "windows" {
+		config, ok := raw.(map[string]any)
+		if !ok || strings.TrimSpace(str(config, "distro")) == "" {
+			return r, errors.New("invalid WSL distro configuration")
+		}
+		wsl = true
+	}
+	absolutePath := func(p string) bool {
+		if wsl {
+			return posixpath.IsAbs(p)
+		}
+		return filepath.IsAbs(p)
 	}
 	for _, k := range []string{"sshConfig", "wslConfig", "remoteHost", "remoteHostId"} {
 		if v, ok := d[k]; ok && v != nil {
-			return r, errors.New("non-local session refused")
+			if k == "wslConfig" && wsl {
+				continue
+			}
+			kind := "remote"
+			if k == "wslConfig" {
+				kind = "WSL"
+			}
+			if k == "sshConfig" {
+				kind = "SSH"
+			}
+			return r, fmt.Errorf("%w: %s sessions are not supported; only local Desktop sessions are synchronized", errUnsupportedSession, kind)
 		}
+	}
+	if !absolutePath(str(d, "cwd")) {
+		return r, errors.New("cwd must be absolute for this operating system")
 	}
 	r.Parent = str(d, "forkedFromSessionId")
 	if r.Parent != "" && (!strings.HasPrefix(r.Parent, "local_") || !uuid.MatchString(strings.TrimPrefix(r.Parent, "local_"))) {
@@ -294,6 +326,9 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 		if v, ok := d[k]; ok {
 			clean[k] = v
 		}
+	}
+	if wsl {
+		clean["wslConfig"] = d["wslConfig"]
 	}
 	for _, k := range []string{"originCwd", "gitAnchorsFolderRealpath", "title", "titleSource", "model", "effort"} {
 		if v, ok := clean[k]; ok {
@@ -335,7 +370,7 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 			for _, k := range []string{"gitRoot", "commonDir", "gitDir"} {
 				if v, ok := m[k]; ok {
 					s, ok := v.(string)
-					if !ok || !filepath.IsAbs(s) {
+					if !ok || !absolutePath(s) {
 						return r, errors.New("invalid anchor path")
 					}
 					c[k] = s
@@ -369,7 +404,7 @@ func list(r *os.Root, p string) ([]fs.DirEntry, error) {
 	if e := safe(r, p, false); e != nil {
 		return nil, e
 	}
-	return fs.ReadDir(r.FS(), p)
+	return fs.ReadDir(r.FS(), filepath.ToSlash(p))
 }
 
 // A fork may retain its parent's transcript prefix before any child turns exist.
@@ -546,6 +581,9 @@ func transcriptProof(rec Record, tr Transcript, index map[string][]Transcript, p
 }
 
 func scan(data, projects, source, target, mode string) (Report, error) {
+	source = filepath.FromSlash(source)
+	target = filepath.FromSlash(target)
+
 	rep := Report{Version: version, DataDir: data, ProjectsDir: projects, CopyMode: mode, SourceBucket: source, TargetBucket: target, FullRecord: mode == "all", Excluded: []string{}, Actions: []Action{}, Warnings: []string{}, Orphans: []string{}, LineageVerified: []string{}}
 	r, e := realRoot(data)
 	if e != nil {
@@ -619,7 +657,13 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 				rec, e := parseRecord(path, bucket, b, mode)
 				if e != nil {
 					blocked[name] = true
-					rep.Warnings = append(rep.Warnings, "Invalid record blocks this filename: "+path)
+					if errors.Is(e, errUnsupportedSession) {
+						rep.UnsupportedRecords++
+						rep.Warnings = append(rep.Warnings, fmt.Sprintf("Skipped %s: %v", path, e))
+					} else {
+						rep.InvalidRecords++
+						rep.Warnings = append(rep.Warnings, fmt.Sprintf("Invalid record blocks this filename: %s: %v", path, e))
+					}
 					continue
 				}
 				for _, field := range rec.Excluded {
@@ -792,6 +836,11 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 			rep.Actions = append(rep.Actions, action)
 		}
 	}
+	if mode == "all" {
+		if e := appendProjectActions(&rep, r, source, target); e != nil {
+			return rep, e
+		}
+	}
 	appendTombstoneActions(&rep, markers, target)
 	sort.SliceStable(rep.Actions, func(i, j int) bool {
 		rank := func(k string) int {
@@ -832,10 +881,7 @@ func discover(explicit string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	candidates := []string{filepath.Join(home, ".config", "Claude")}
-	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
-		candidates = append(candidates, filepath.Join(x, "Claude"))
-	}
+	candidates := dataCandidates(home)
 	found := map[string]bool{}
 	for _, p := range candidates {
 		r, e := realRoot(p)
@@ -844,8 +890,12 @@ func discover(explicit string) (string, error) {
 		}
 		i, e := r.Lstat("claude-code-sessions")
 		r.Close()
-		if e == nil && i.IsDir() {
-			found[p] = true
+		if e == nil && i.IsDir() && !unsafeLink(i) {
+			key := filepath.Clean(p)
+			if runtime.GOOS == "windows" {
+				key = strings.ToLower(key)
+			}
+			found[key] = true
 		}
 	}
 	if len(found) != 1 {
@@ -855,14 +905,6 @@ func discover(explicit string) (string, error) {
 		return p, nil
 	}
 	panic("unreachable")
-}
-func durableDir(r *os.Root, p string) error {
-	f, e := r.Open(p)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	return f.Sync()
 }
 func add(r *os.Root, path string, b []byte) error {
 	if e := safe(r, path, true); e != nil {
@@ -900,7 +942,7 @@ func lockRoot(r *os.Root) (*os.File, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+	if e = platformLock(f); e != nil {
 		f.Close()
 		return nil, errors.New("another sync/undo is running")
 	}
@@ -914,7 +956,7 @@ func run(args []string) error {
 		return interactiveMenu(consoleInput, os.Stdout, run)
 	}
 	if len(args) == 0 {
-		fmt.Println("Claude Desktop session sync " + version + " (Linux)\nCommands: interactive, doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
+		fmt.Println("Claude Desktop session sync " + version + " (" + runtime.GOOS + ")\nCommands: interactive, doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
 		return nil
 	}
 	cmd := args[0]
@@ -1021,7 +1063,8 @@ func run(args []string) error {
 		if *write {
 			label = "Synchronization complete"
 		}
-		fmt.Fprintf(os.Stdout, "%s. Added: %d. Updated: %d. Quarantined: %d. Deletion markers: %d. Session records: %d. Skipped/unproven: %d.\n", label, rep.Added, rep.Updated, rep.Quarantined, rep.Tombstones, rep.Records, rep.MissingTranscripts)
+		fmt.Fprintf(os.Stdout, "%s. Added: %d. Updated: %d. Quarantined: %d. Deletion markers: %d. Session records: %d. Skipped/unproven: %d (unsupported: %d; invalid: %d; missing/unproven transcripts: %d).\n", label, rep.Added, rep.Updated, rep.Quarantined, rep.Tombstones, rep.Records, rep.MissingTranscripts+rep.UnsupportedRecords+rep.InvalidRecords, rep.UnsupportedRecords, rep.InvalidRecords, rep.MissingTranscripts)
+		fmt.Fprintf(os.Stdout, "Saved projects. Added: %d. Updated: %d.\n", rep.ProjectsAdded, rep.ProjectsUpdated)
 		for _, w := range rep.Warnings {
 			fmt.Fprintln(os.Stdout, "Warning:", w)
 		}

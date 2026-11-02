@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package main
 
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -55,7 +56,7 @@ func save(t *testing.T, p string, m map[string]any) {
 func setup(t *testing.T) fixture {
 	t.Helper()
 	root := t.TempDir()
-	f := fixture{data: filepath.Join(root, "Claude"), projects: filepath.Join(root, "projects"), a: accountA + "/" + org, b: accountB + "/" + org}
+	f := fixture{data: filepath.Join(root, "Claude"), projects: filepath.Join(root, "projects"), a: filepath.Join(accountA, org), b: filepath.Join(accountB, org)}
 	for _, b := range []string{f.a, f.b} {
 		if e := os.MkdirAll(filepath.Join(f.data, "claude-code-sessions", b), 0700); e != nil {
 			t.Fatal(e)
@@ -129,7 +130,7 @@ func TestApplyIdempotentBackupUndo(t *testing.T) {
 	}
 	manifest := filepath.Join(f.data, backupDir, id, "manifest.json")
 	i, e := os.Stat(manifest)
-	if e != nil || i.Mode().Perm() != 0600 {
+	if e != nil || (runtime.GOOS != "windows" && i.Mode().Perm() != 0600) {
 		t.Fatal("backup permission")
 	}
 	if len(plan(t, f, "all").Actions) != 0 {
@@ -233,10 +234,51 @@ func TestCorruptRecordBlocksName(t *testing.T) {
 		t.Fatal("corruption ignored")
 	}
 }
+
+func TestWSLSessionsKeepTransportOnWindows(t *testing.T) {
+	f := setup(t)
+	d := object(t, f.record)
+	d["cwd"] = "/home/test/project"
+	d["wslConfig"] = map[string]any{"distro": "archlinux"}
+	d["gitAnchors"] = []any{map[string]any{"gitRoot": "/home/test/project", "commonDir": "/home/test/project/.git"}}
+	save(t, f.record, d)
+	for _, mode := range []string{"all", "chat"} {
+		rep := plan(t, f, mode)
+		if runtime.GOOS != "windows" {
+			if rep.UnsupportedRecords != 1 || len(rep.Actions) != 0 {
+				t.Fatal("Linux accepted WSL transport")
+			}
+			continue
+		}
+		if rep.UnsupportedRecords != 0 || len(rep.Actions) != 1 {
+			t.Fatalf("Windows WSL session rejected: %v", rep.Warnings)
+		}
+		var payload map[string]any
+		json.Unmarshal(rep.Actions[0].Payload, &payload)
+		config, ok := payload["wslConfig"].(map[string]any)
+		if !ok || config["distro"] != "archlinux" || payload["cwd"] != "/home/test/project" {
+			t.Fatal("WSL identity/path lost")
+		}
+	}
+}
+
+func TestInvalidRecordDiagnosticIncludesReason(t *testing.T) {
+	f := setup(t)
+	d := object(t, f.record)
+	d["sessionId"] = "wrong"
+	save(t, f.record, d)
+	r := plan(t, f, "all")
+	if r.InvalidRecords != 1 || r.UnsupportedRecords != 0 || !strings.Contains(strings.Join(r.Warnings, "\n"), "sessionId does not match filename") {
+		t.Fatal("invalid record diagnostic missing reason/count")
+	}
+}
 func TestSymlinkRefused(t *testing.T) {
 	f := setup(t)
 	dst := filepath.Join(f.data, "claude-code-sessions", f.b, filepath.Base(f.record))
 	if e := os.Symlink(f.record, dst); e != nil {
+		if runtime.GOOS == "windows" && errors.Is(e, syscall.Errno(1314)) {
+			t.Skip("Windows account lacks symbolic-link privilege")
+		}
 		t.Fatal(e)
 	}
 	if _, e := scan(f.data, f.projects, "", "", "all"); e == nil {
@@ -246,7 +288,12 @@ func TestSymlinkRefused(t *testing.T) {
 func TestRootSymlinkRefused(t *testing.T) {
 	f := setup(t)
 	link := filepath.Join(t.TempDir(), "linked")
-	os.Symlink(f.data, link)
+	if e := os.Symlink(f.data, link); e != nil {
+		if runtime.GOOS == "windows" && errors.Is(e, syscall.Errno(1314)) {
+			t.Skip("Windows account lacks symbolic-link privilege")
+		}
+		t.Fatal(e)
+	}
 	if _, e := scan(link, f.projects, "", "", "all"); e == nil {
 		t.Fatal("followed root symlink")
 	}
@@ -351,11 +398,14 @@ func TestAliasCollision(t *testing.T) {
 	}
 }
 func TestFIFORefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX FIFO test")
+	}
 	f := setup(t)
 	if e := os.Remove(f.record); e != nil {
 		t.Fatal(e)
 	}
-	if e := syscall.Mkfifo(f.record, 0600); e != nil {
+	if e := makeFIFO(f.record, 0600); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := scan(f.data, f.projects, "", "", "all"); e == nil {
@@ -564,10 +614,13 @@ func TestMalformedTranscriptCannotHideAfterValidMarker(t *testing.T) {
 	}
 }
 func TestFIFOTranscriptRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX FIFO test")
+	}
 	f := setup(t)
 	p := filepath.Join(f.projects, "project", cli+".jsonl")
 	os.Remove(p)
-	if e := syscall.Mkfifo(p, 0600); e != nil {
+	if e := makeFIFO(p, 0600); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := scan(f.data, f.projects, "", "", "all"); e == nil {
@@ -576,7 +629,7 @@ func TestFIFOTranscriptRefused(t *testing.T) {
 }
 func TestUndoPreviousVersionBackup(t *testing.T) {
 	noProcesses(t)
-	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1"} {
+	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", "0.3.2", "0.4.0"} {
 		t.Run(priorVersion, func(t *testing.T) {
 			f := setup(t)
 			id, e := apply(plan(t, f, "all"))

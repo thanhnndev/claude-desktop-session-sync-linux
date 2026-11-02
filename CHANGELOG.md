@@ -2,6 +2,26 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.5.0] — 2026-11-02
+
+- Synchronize saved Code projects in all mode, preserving local/WSL folder targets, names and complete settings across existing accounts. Merge newest preset versions and report unresolved conflicts without overwriting unrelated account metadata.
+- Include project registry updates in stale-plan validation, write-ahead backups and exact undo.
+- Support Windows-created WSL session metadata using existing verified Desktop transcripts; retain WSL transport and POSIX paths in both copy modes without copying source trees.
+- Validate on real Windows data copies: saved-project merge, idempotence, exact undo and unchanged live registry; Linux regression tests also pass.
+
+## [0.4.1] — Unreleased
+
+- Classify WSL/SSH/remote records as unsupported rather than corrupt, checking transport before host-specific cwd validation.
+- Include rejection reasons in warnings and unsupported/invalid counts in JSON and interactive skipped totals.
+- Keep refusing unsupported sessions and retain undo compatibility with 0.4.0 backups.
+
+## [0.4.0] — Unreleased
+
+- Add native Windows amd64 support: discover Desktop userData, handle drive paths and slash selectors, lock files with LockFileEx, inspect same-user processes by SID, and terminate only explicitly selected process identities.
+- Restrict new Windows backups to the current user and SYSTEM with inheritable DACLs. Keep Linux permissions and existing backup names; retain undo compatibility through 0.3.2.
+- Share the sync engine and portable tests between Windows and Linux; add native Windows CI and build output.
+- Validate both copy modes, idempotence and exact undo against temporary copies of this Windows machine's data. Live metadata/transcript hashes remained unchanged. Live cross-account UI continuation remains unverified; see docs/WINDOWS.md.
+
 ## [0.3.2] — 2026-10-27
 
 ### Fixed

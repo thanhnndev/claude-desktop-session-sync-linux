@@ -6,3 +6,5 @@
 /BUILD-REPORT.txt
 *.log
 .linux-session-sync-backups/
+
+/claude-session-sync.exe

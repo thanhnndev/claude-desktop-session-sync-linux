@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package main
 
@@ -304,7 +304,7 @@ func TestPartialUpdateUndoSkipsUnappliedActions(t *testing.T) {
 	setTime(t, f.record, 1000000000)
 	synchronize(t, f, "all")
 	// Add a third existing account to make two update targets.
-	third := "55555555-5555-4555-8555-555555555555/" + org
+	third := filepath.Join("55555555-5555-4555-8555-555555555555", org)
 	os.MkdirAll(filepath.Join(f.data, "claude-code-sessions", third), 0700)
 	synchronize(t, f, "all")
 	d := object(t, f.record)

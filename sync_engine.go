@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package main
 
@@ -145,7 +145,7 @@ func timestamp(r *os.Root, path string, ns int64) error {
 	if e := r.Chtimes(path, t, t); e != nil {
 		return e
 	}
-	f, e := r.Open(path)
+	f, e := r.OpenFile(path, os.O_RDWR, 0)
 	if e != nil {
 		return e
 	}
@@ -238,11 +238,14 @@ func apply(rep Report) (string, error) {
 	if e = r.MkdirAll(backupDir, 0700); e != nil {
 		return "", e
 	}
+	if e = secureBackup(r); e != nil {
+		return "", e
+	}
 	info, e := r.Stat(backupDir)
 	if e != nil {
 		return "", e
 	}
-	if info.Mode().Perm() != 0700 {
+	if !privateBackup(info) {
 		return "", errors.New("backup directory must have mode 0700")
 	}
 	id := time.Now().UTC().Format("20060102T150405.000000000Z")
@@ -308,7 +311,10 @@ func apply(rep Report) (string, error) {
 	return id, nil
 }
 func validJournalAction(a StoredAction) error {
-	parts := strings.Split(a.Target, "/")
+	if a.Target == presetsFile || a.Kind == "projects" {
+		return validProjectJournal(a)
+	}
+	parts := strings.Split(filepath.ToSlash(a.Target), "/")
 	if len(parts) != 4 || parts[0] != "claude-code-sessions" || !uuid.MatchString(parts[1]) || !uuid.MatchString(parts[2]) {
 		return errors.New("invalid manifest target")
 	}
@@ -370,7 +376,7 @@ func undo(data, id string, write bool) ([]string, error) {
 		return nil, e
 	}
 	switch j.Version {
-	case "0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", version:
+	case "0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", "0.3.2", "0.4.0", "0.4.1", version:
 	default:
 		return nil, errors.New("unsupported manifest version")
 	}

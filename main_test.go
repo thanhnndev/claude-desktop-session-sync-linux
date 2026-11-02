@@ -234,6 +234,34 @@ func TestCorruptRecordBlocksName(t *testing.T) {
 		t.Fatal("corruption ignored")
 	}
 }
+
+func TestWSLSessionsReportedAsUnsupported(t *testing.T) {
+	f := setup(t)
+	d := object(t, f.record)
+	d["cwd"] = "/home/test/project"
+	d["wslConfig"] = map[string]any{"distro": "archlinux"}
+	save(t, f.record, d)
+	for _, mode := range []string{"all", "chat"} {
+		r := plan(t, f, mode)
+		if r.UnsupportedRecords != 1 || r.InvalidRecords != 0 || len(r.Actions) != 0 {
+			t.Fatalf("WSL classification: unsupported=%d invalid=%d actions=%d", r.UnsupportedRecords, r.InvalidRecords, len(r.Actions))
+		}
+		if len(r.Warnings) == 0 || !strings.Contains(r.Warnings[0], "WSL sessions are not supported") {
+			t.Fatal("missing actionable WSL diagnostic")
+		}
+	}
+}
+
+func TestInvalidRecordDiagnosticIncludesReason(t *testing.T) {
+	f := setup(t)
+	d := object(t, f.record)
+	d["sessionId"] = "wrong"
+	save(t, f.record, d)
+	r := plan(t, f, "all")
+	if r.InvalidRecords != 1 || r.UnsupportedRecords != 0 || !strings.Contains(strings.Join(r.Warnings, "\n"), "sessionId does not match filename") {
+		t.Fatal("invalid record diagnostic missing reason/count")
+	}
+}
 func TestSymlinkRefused(t *testing.T) {
 	f := setup(t)
 	dst := filepath.Join(f.data, "claude-code-sessions", f.b, filepath.Base(f.record))
@@ -591,7 +619,7 @@ func TestFIFOTranscriptRefused(t *testing.T) {
 }
 func TestUndoPreviousVersionBackup(t *testing.T) {
 	noProcesses(t)
-	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", "0.3.2"} {
+	for _, priorVersion := range []string{"0.1.0", "0.1.1", "0.2.0", "0.3.0", "0.3.1", "0.3.2", "0.4.0"} {
 		t.Run(priorVersion, func(t *testing.T) {
 			f := setup(t)
 			id, e := apply(plan(t, f, "all"))

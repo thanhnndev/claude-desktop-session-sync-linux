@@ -23,9 +23,11 @@ import (
 	"time"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 var guard = processGuard
+
+var errUnsupportedSession = errors.New("unsupported session")
 
 const backupDir = ".linux-session-sync-backups"
 
@@ -73,6 +75,8 @@ type Report struct {
 	Warnings           []string `json:"warnings"`
 	Orphans            []string `json:"desktop_transcripts_without_pointer"`
 	MissingTranscripts int      `json:"missing_transcripts"`
+	UnsupportedRecords int      `json:"unsupported_records"`
+	InvalidRecords     int      `json:"invalid_records"`
 }
 type StoredAction struct {
 	Kind             string `json:"kind,omitempty"`
@@ -253,13 +257,20 @@ func parseRecord(path, bucket string, b []byte, mode string) (Record, error) {
 	if !uuid.MatchString(str(d, "cliSessionId")) && !uuid.MatchString(str(d, "unarchivedCliSessionId")) {
 		return r, errors.New("no valid transcript ID")
 	}
-	if !filepath.IsAbs(str(d, "cwd")) {
-		return r, errors.New("cwd must be absolute")
-	}
 	for _, k := range []string{"sshConfig", "wslConfig", "remoteHost", "remoteHostId"} {
 		if v, ok := d[k]; ok && v != nil {
-			return r, errors.New("non-local session refused")
+			kind := "remote"
+			if k == "wslConfig" {
+				kind = "WSL"
+			}
+			if k == "sshConfig" {
+				kind = "SSH"
+			}
+			return r, fmt.Errorf("%w: %s sessions are not supported; only local Desktop sessions are synchronized", errUnsupportedSession, kind)
 		}
+	}
+	if !filepath.IsAbs(str(d, "cwd")) {
+		return r, errors.New("cwd must be absolute for this operating system")
 	}
 	r.Parent = str(d, "forkedFromSessionId")
 	if r.Parent != "" && (!strings.HasPrefix(r.Parent, "local_") || !uuid.MatchString(strings.TrimPrefix(r.Parent, "local_"))) {
@@ -623,7 +634,13 @@ func scan(data, projects, source, target, mode string) (Report, error) {
 				rec, e := parseRecord(path, bucket, b, mode)
 				if e != nil {
 					blocked[name] = true
-					rep.Warnings = append(rep.Warnings, "Invalid record blocks this filename: "+path)
+					if errors.Is(e, errUnsupportedSession) {
+						rep.UnsupportedRecords++
+						rep.Warnings = append(rep.Warnings, fmt.Sprintf("Skipped %s: %v", path, e))
+					} else {
+						rep.InvalidRecords++
+						rep.Warnings = append(rep.Warnings, fmt.Sprintf("Invalid record blocks this filename: %s: %v", path, e))
+					}
 					continue
 				}
 				for _, field := range rec.Excluded {
@@ -1018,7 +1035,7 @@ func run(args []string) error {
 		if *write {
 			label = "Synchronization complete"
 		}
-		fmt.Fprintf(os.Stdout, "%s. Added: %d. Updated: %d. Quarantined: %d. Deletion markers: %d. Session records: %d. Skipped/unproven: %d.\n", label, rep.Added, rep.Updated, rep.Quarantined, rep.Tombstones, rep.Records, rep.MissingTranscripts)
+		fmt.Fprintf(os.Stdout, "%s. Added: %d. Updated: %d. Quarantined: %d. Deletion markers: %d. Session records: %d. Skipped/unproven: %d (unsupported: %d; invalid: %d; missing/unproven transcripts: %d).\n", label, rep.Added, rep.Updated, rep.Quarantined, rep.Tombstones, rep.Records, rep.MissingTranscripts+rep.UnsupportedRecords+rep.InvalidRecords, rep.UnsupportedRecords, rep.InvalidRecords, rep.MissingTranscripts)
 		for _, w := range rep.Warnings {
 			fmt.Fprintln(os.Stdout, "Warning:", w)
 		}

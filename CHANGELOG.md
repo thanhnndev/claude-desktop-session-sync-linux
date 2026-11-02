@@ -2,6 +2,12 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.4.1] — Unreleased
+
+- Classify WSL/SSH/remote records as unsupported rather than corrupt, checking transport before host-specific cwd validation.
+- Include rejection reasons in warnings and unsupported/invalid counts in JSON and interactive skipped totals.
+- Keep refusing unsupported sessions and retain undo compatibility with 0.4.0 backups.
+
 ## [0.4.0] — Unreleased
 
 - Add native Windows amd64 support: discover Desktop userData, handle drive paths and slash selectors, lock files with LockFileEx, inspect same-user processes by SID, and terminate only explicitly selected process identities.

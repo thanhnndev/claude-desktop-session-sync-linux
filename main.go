@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 // An offline, bidirectional synchronizer for Claude Desktop Code metadata.
 package main
@@ -17,13 +17,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
-const version = "0.3.2"
+const version = "0.4.0"
 
 var guard = processGuard
 
@@ -106,14 +106,15 @@ func realRoot(p string) (*os.Root, error) {
 		return nil, err
 	}
 	// Refuse every symlink component, including the supplied root.
-	cur := string(filepath.Separator)
-	for _, part := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+	volume := filepath.VolumeName(p)
+	cur := volume + string(filepath.Separator)
+	for _, part := range strings.Split(strings.TrimPrefix(p[len(volume):], string(filepath.Separator)), string(filepath.Separator)) {
 		cur = filepath.Join(cur, part)
 		i, e := os.Lstat(cur)
 		if e != nil {
 			return nil, e
 		}
-		if i.Mode()&os.ModeSymlink != 0 {
+		if unsafeLink(i) {
 			return nil, fmt.Errorf("symlink refused: %s", cur)
 		}
 	}
@@ -133,7 +134,7 @@ func safe(r *os.Root, p string, missing bool) error {
 		if e != nil {
 			return e
 		}
-		if i.Mode()&os.ModeSymlink != 0 {
+		if unsafeLink(i) {
 			return fmt.Errorf("symlink refused: %s", cur)
 		}
 		if cur != p && !i.IsDir() {
@@ -369,7 +370,7 @@ func list(r *os.Root, p string) ([]fs.DirEntry, error) {
 	if e := safe(r, p, false); e != nil {
 		return nil, e
 	}
-	return fs.ReadDir(r.FS(), p)
+	return fs.ReadDir(r.FS(), filepath.ToSlash(p))
 }
 
 // A fork may retain its parent's transcript prefix before any child turns exist.
@@ -546,6 +547,9 @@ func transcriptProof(rec Record, tr Transcript, index map[string][]Transcript, p
 }
 
 func scan(data, projects, source, target, mode string) (Report, error) {
+	source = filepath.FromSlash(source)
+	target = filepath.FromSlash(target)
+
 	rep := Report{Version: version, DataDir: data, ProjectsDir: projects, CopyMode: mode, SourceBucket: source, TargetBucket: target, FullRecord: mode == "all", Excluded: []string{}, Actions: []Action{}, Warnings: []string{}, Orphans: []string{}, LineageVerified: []string{}}
 	r, e := realRoot(data)
 	if e != nil {
@@ -832,10 +836,7 @@ func discover(explicit string) (string, error) {
 	if e != nil {
 		return "", e
 	}
-	candidates := []string{filepath.Join(home, ".config", "Claude")}
-	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
-		candidates = append(candidates, filepath.Join(x, "Claude"))
-	}
+	candidates := dataCandidates(home)
 	found := map[string]bool{}
 	for _, p := range candidates {
 		r, e := realRoot(p)
@@ -844,8 +845,12 @@ func discover(explicit string) (string, error) {
 		}
 		i, e := r.Lstat("claude-code-sessions")
 		r.Close()
-		if e == nil && i.IsDir() {
-			found[p] = true
+		if e == nil && i.IsDir() && !unsafeLink(i) {
+			key := filepath.Clean(p)
+			if runtime.GOOS == "windows" {
+				key = strings.ToLower(key)
+			}
+			found[key] = true
 		}
 	}
 	if len(found) != 1 {
@@ -855,14 +860,6 @@ func discover(explicit string) (string, error) {
 		return p, nil
 	}
 	panic("unreachable")
-}
-func durableDir(r *os.Root, p string) error {
-	f, e := r.Open(p)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	return f.Sync()
 }
 func add(r *os.Root, path string, b []byte) error {
 	if e := safe(r, path, true); e != nil {
@@ -900,7 +897,7 @@ func lockRoot(r *os.Root) (*os.File, error) {
 	if e != nil {
 		return nil, e
 	}
-	if e = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+	if e = platformLock(f); e != nil {
 		f.Close()
 		return nil, errors.New("another sync/undo is running")
 	}
@@ -914,7 +911,7 @@ func run(args []string) error {
 		return interactiveMenu(consoleInput, os.Stdout, run)
 	}
 	if len(args) == 0 {
-		fmt.Println("Claude Desktop session sync " + version + " (Linux)\nCommands: interactive, doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
+		fmt.Println("Claude Desktop session sync " + version + " (" + runtime.GOOS + ")\nCommands: interactive, doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
 		return nil
 	}
 	cmd := args[0]

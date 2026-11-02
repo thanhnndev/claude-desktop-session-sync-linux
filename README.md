@@ -1,5 +1,9 @@
 # Claude Desktop Session Sync — Linux
 
+## Windows support
+
+Version 0.4.0 also builds and runs natively on Windows amd64. See [Windows installation, discovery, safety and validation](docs/WINDOWS.md). Windows/WSL session paths are not converted.
+
 **English** | [Tiếng Việt](README_VI.md)
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
 
@@ -154,7 +158,7 @@ Undo restores previous record versions, restores records quarantined by sync, an
 
 ## Build and test
 
-Go 1.25+; no external dependencies:
+Go 1.25+; Windows uses `golang.org/x/sys/windows`:
 
 ```bash
 go test -race -cover ./...

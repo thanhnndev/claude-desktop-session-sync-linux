@@ -1,5 +1,9 @@
 # Claude Desktop Session Sync — Linux
 
+## Hỗ trợ Windows
+
+Bản 0.4.0 chạy native trên Windows amd64. Xem [hướng dẫn cài đặt và kiểm chứng Windows](docs/WINDOWS.md). Không chuyển đổi session giữa Windows và WSL.
+
 [English](README.md) | **Tiếng Việt**
 [Lịch sử thay đổi](CHANGELOG.md) · [Các bản phát hành](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
 
@@ -153,7 +157,7 @@ Undo phục hồi phiên bản trước, khôi phục bản ghi đã được sy
 
 ## Build và test
 
-Go 1.25+; không có dependency bên ngoài:
+Go 1.25+; bản Windows dùng `golang.org/x/sys/windows`:
 
 ```bash
 go test -race -cover ./...

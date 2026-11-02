@@ -2,6 +2,13 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.4.0] — Unreleased
+
+- Add native Windows amd64 support: discover Desktop userData, handle drive paths and slash selectors, lock files with LockFileEx, inspect same-user processes by SID, and terminate only explicitly selected process identities.
+- Restrict new Windows backups to the current user and SYSTEM with inheritable DACLs. Keep Linux permissions and existing backup names; retain undo compatibility through 0.3.2.
+- Share the sync engine and portable tests between Windows and Linux; add native Windows CI and build output.
+- Validate both copy modes, idempotence and exact undo against temporary copies of this Windows machine's data. Live metadata/transcript hashes remained unchanged. Live cross-account UI continuation remains unverified; see docs/WINDOWS.md.
+
 ## [0.3.2] — 2026-10-27
 
 ### Fixed

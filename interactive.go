@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package main
 
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -36,8 +37,8 @@ func waitForClaude(in *bufio.Reader, out io.Writer, check func() error, quit fun
 		}
 		fmt.Fprintln(out, "\nClaude is still running. Synchronization has not started.")
 		fmt.Fprintln(out, "[R] Retry after closing Claude")
-		fmt.Fprintln(out, "[F] Force quit Claude Desktop and Claude workers for your Linux user")
-		fmt.Fprintln(out, "    Force quit can interrupt active work. Remaining processes are killed after 6 seconds.")
+		fmt.Fprintln(out, "[F] Force quit Claude Desktop and Claude workers for your user")
+		fmt.Fprintln(out, "    Force quit can interrupt active work. Windows terminates selected processes immediately; Linux waits before escalating.")
 		fmt.Fprintln(out, "[C] Cancel")
 		fmt.Fprint(out, "Choose R, F or C: ")
 		choice, e := readChoice(in)
@@ -61,7 +62,7 @@ func waitForClaude(in *bufio.Reader, out io.Writer, check func() error, quit fun
 }
 func interactiveMenu(in *bufio.Reader, out io.Writer, execute func([]string) error) error {
 	for {
-		fmt.Fprintln(out, "\nClaude Desktop Session Sync "+version+" — Linux")
+		fmt.Fprintln(out, "\nClaude Desktop Session Sync "+version+" — "+runtime.GOOS)
 		fmt.Fprintln(out, "[1] Preview synchronization — all session configuration")
 		fmt.Fprintln(out, "[2] Back up and synchronize — all session configuration")
 		fmt.Fprintln(out, "[3] Preview synchronization — chat history only")

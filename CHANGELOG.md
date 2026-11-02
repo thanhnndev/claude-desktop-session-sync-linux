@@ -2,7 +2,7 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
-## [0.5.0] — Unreleased
+## [0.5.0] — 2026-11-02
 
 - Synchronize saved Code projects in all mode, preserving local/WSL folder targets, names and complete settings across existing accounts. Merge newest preset versions and report unresolved conflicts without overwriting unrelated account metadata.
 - Include project registry updates in stale-plan validation, write-ahead backups and exact undo.

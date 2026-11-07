@@ -22,3 +22,5 @@ func dataCandidates(home string) []string {
 	}
 	return candidates
 }
+
+func systemAlias(p string) string { return p }

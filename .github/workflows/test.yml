@@ -1,4 +1,4 @@
-name: Linux and Windows checks
+name: Linux, macOS and Windows checks
 on: [push, pull_request]
 permissions:
   contents: read
@@ -28,3 +28,14 @@ jobs:
         with:
           name: windows-amd64
           path: dist/windows-amd64/claude-session-sync.exe
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+      - run: go test -race -cover ./...
+      - run: go vet ./...
+      - run: CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o /tmp/claude-session-sync-darwin-amd64 .
+      - run: CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o /tmp/claude-session-sync-darwin-arm64 .

@@ -1,4 +1,4 @@
-//go:build linux || windows
+//go:build linux || windows || darwin
 
 // An offline, bidirectional synchronizer for Claude Desktop Code metadata.
 package main
@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 var guard = processGuard
 
@@ -112,6 +112,7 @@ func realRoot(p string) (*os.Root, error) {
 	if err != nil {
 		return nil, err
 	}
+	p = systemAlias(p)
 	// Refuse every symlink component, including the supplied root.
 	volume := filepath.VolumeName(p)
 	cur := volume + string(filepath.Separator)
@@ -956,13 +957,16 @@ func run(args []string) error {
 		return interactiveMenu(consoleInput, os.Stdout, run)
 	}
 	if len(args) == 0 {
-		fmt.Println("Claude Desktop session sync " + version + " (" + runtime.GOOS + ")\nCommands: interactive, doctor, plan, sync, undo, version\nAll operations are dry-run unless --apply --offline are both present.\nUse COMMAND --help for options.")
+		fmt.Println("Claude Desktop session sync " + version + " (" + runtime.GOOS + ")\nCommands: interactive, doctor, plan, sync, undo, backup, backups, verify, restore, version\nSync, undo and restore are dry-run unless --apply --offline are both present.\nbackup only reads Claude data and writes a new folder under --dest.\nUse COMMAND --help for options.")
 		return nil
 	}
 	cmd := args[0]
 	if cmd == "version" {
 		fmt.Println(version)
 		return nil
+	}
+	if cmd == "backup" || cmd == "backups" || cmd == "verify" || cmd == "restore" {
+		return runBackupCommand(cmd, args[1:])
 	}
 	if cmd != "doctor" && cmd != "plan" && cmd != "sync" && cmd != "undo" {
 		return errors.New("unknown command")

@@ -5,10 +5,12 @@ test:
 	go vet .
 
 build:
-	mkdir -p dist/linux-amd64 dist/linux-arm64 dist/windows-amd64
+	mkdir -p dist/linux-amd64 dist/linux-arm64 dist/windows-amd64 dist/darwin-amd64 dist/darwin-arm64
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/linux-amd64/claude-session-sync .
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/linux-arm64/claude-session-sync .
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/windows-amd64/claude-session-sync.exe .
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o dist/darwin-amd64/claude-session-sync .
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o dist/darwin-arm64/claude-session-sync .
 
 dist: build
 	cp README.md README_VI.md LICENSE NOTICE dist/linux-amd64/

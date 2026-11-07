@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -81,23 +82,19 @@ func defaultClaudeHome() (string, error) {
 	return filepath.Join(h, ".claude"), nil
 }
 
-func copyHashed(src, dst string, mode os.FileMode) (int64, string, error) {
+// copyExact copies exactly size bytes (the size seen when the file was
+// listed) and hashes them. A transcript that grows meanwhile is captured as
+// the prefix that existed at that moment, which is still valid JSONL.
+func copyExact(src string, size int64, w io.Writer) (int64, string, error) {
 	in, e := os.Open(src)
 	if e != nil {
 		return 0, "", e
 	}
 	defer in.Close()
-	out, e := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if e != nil {
-		return 0, "", e
-	}
 	h := sha256.New()
-	n, e := io.Copy(io.MultiWriter(out, h), in)
-	if e == nil {
-		e = out.Sync()
-	}
-	if ce := out.Close(); e == nil {
-		e = ce
+	n, e := io.Copy(io.MultiWriter(w, h), io.LimitReader(in, size))
+	if e == nil && n != size {
+		e = fmt.Errorf("file shrank during backup (%d of %d bytes)", n, size)
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), e
 }
@@ -113,10 +110,61 @@ func hashFile(p string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), n, e
 }
 
+// backupSink receives the files of one backup: a plain folder or a tar.gz.
+type backupSink interface {
+	add(role, rel, src string, info fs.FileInfo) (int64, string, error)
+	finish(m BackupManifest) error
+	abort()
+	path() string
+}
+
+type dirSink struct{ dir string }
+
+func (s *dirSink) path() string { return s.dir }
+func (s *dirSink) abort()       {}
+func (s *dirSink) add(role, rel, src string, info fs.FileInfo) (int64, string, error) {
+	target := filepath.Join(s.dir, backupFilesDir, role, rel)
+	if e := os.MkdirAll(filepath.Dir(target), 0700); e != nil {
+		return 0, "", e
+	}
+	out, e := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if e != nil {
+		return 0, "", e
+	}
+	n, sum, e := copyExact(src, info.Size(), out)
+	if e == nil {
+		e = out.Sync()
+	}
+	if ce := out.Close(); e == nil {
+		e = ce
+	}
+	if e != nil {
+		os.Remove(target)
+		return 0, "", e
+	}
+	os.Chtimes(target, info.ModTime(), info.ModTime())
+	return n, sum, nil
+}
+func (s *dirSink) finish(m BackupManifest) error {
+	b, e := json.MarshalIndent(m, "", "  ")
+	if e != nil {
+		return e
+	}
+	tmp := filepath.Join(s.dir, manifestName+".tmp")
+	if e := os.WriteFile(tmp, b, 0600); e != nil {
+		return e
+	}
+	if e := os.Rename(tmp, filepath.Join(s.dir, manifestName)); e != nil {
+		return e
+	}
+	return os.WriteFile(filepath.Join(s.dir, "README-RESTORE.txt"), []byte(restoreHelp(s.dir)), 0600)
+}
+
 // createBackup copies the selected session data into a new timestamped
-// directory under dest. Sources are only read. The manifest is written last,
-// so a directory without manifest.json is an incomplete backup.
-func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time) (string, BackupManifest, error) {
+// backup under dest: a folder, or a single .tar.gz when archive is true.
+// Sources are only read. The manifest is written last, so a folder without
+// manifest.json (or a leftover .partial archive) is an incomplete backup.
+func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time, archive ...bool) (string, BackupManifest, error) {
 	m := BackupManifest{Format: backupFormat, Tool: version, Created: now.UTC().Format(time.RFC3339), OS: runtime.GOOS, Roots: map[string]string{}, Skipped: []string{}}
 	m.Host, _ = os.Hostname()
 	dest, e := filepath.Abs(dest)
@@ -146,9 +194,24 @@ func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time
 			return "", m, fmt.Errorf("backup destination is inside the %s data root; choose another folder", role)
 		}
 	}
-	dir := filepath.Join(dest, backupPrefix+now.Format("20060102-150405"))
-	if e := os.Mkdir(dir, 0700); e != nil {
-		return "", m, e
+	name := backupPrefix + now.Format("20060102-150405")
+	var sink backupSink
+	if len(archive) > 0 && archive[0] {
+		s, e := newTarSink(filepath.Join(dest, name+archiveExt))
+		if e != nil {
+			return "", m, e
+		}
+		sink = s
+	} else {
+		dir := filepath.Join(dest, name)
+		if e := os.Mkdir(dir, 0700); e != nil {
+			return "", m, e
+		}
+		sink = &dirSink{dir}
+	}
+	fail := func(e error) (string, BackupManifest, error) {
+		sink.abort()
+		return sink.path(), m, e
 	}
 	for _, role := range []string{"desktop", "claude"} {
 		root := m.Roots[role]
@@ -171,9 +234,8 @@ func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time
 					m.Skipped = append(m.Skipped, role+"/"+slash+": symlink not followed")
 					return nil
 				}
-				target := filepath.Join(dir, backupFilesDir, role, rel)
 				if d.IsDir() {
-					return os.MkdirAll(target, 0700)
+					return nil
 				}
 				if !d.Type().IsRegular() {
 					m.Skipped = append(m.Skipped, role+"/"+slash+": not a regular file")
@@ -184,19 +246,14 @@ func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time
 					m.Skipped = append(m.Skipped, role+"/"+slash+": "+e.Error())
 					return nil
 				}
-				if e := os.MkdirAll(filepath.Dir(target), 0700); e != nil {
-					return e
-				}
-				n, sum, e := copyHashed(p, target, 0600)
+				n, sum, e := sink.add(role, rel, p, info)
 				if errors.Is(e, fs.ErrNotExist) {
 					m.Skipped = append(m.Skipped, role+"/"+slash+": vanished during backup")
-					os.Remove(target)
 					return nil
 				}
 				if e != nil {
 					return fmt.Errorf("copy %s: %w", p, e)
 				}
-				os.Chtimes(target, info.ModTime(), info.ModTime())
 				m.Files = append(m.Files, BackupFile{Role: role, Path: slash, Size: n, Mode: uint32(info.Mode().Perm()), ModifiedNS: info.ModTime().UnixNano(), SHA256: sum})
 				m.Bytes += n
 				if role == "desktop" && strings.HasPrefix(slash, "claude-code-sessions/") && strings.HasPrefix(filepath.Base(slash), "local_") && strings.HasSuffix(slash, ".json") {
@@ -208,7 +265,7 @@ func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time
 				return nil
 			})
 			if e != nil {
-				return dir, m, e
+				return fail(e)
 			}
 		}
 	}
@@ -218,23 +275,15 @@ func createBackup(dest string, roots backupRoots, withConfig bool, now time.Time
 		}
 		return m.Files[i].Path < m.Files[j].Path
 	})
-	b, e := json.MarshalIndent(m, "", "  ")
-	if e != nil {
-		return dir, m, e
+	if e := sink.finish(m); e != nil {
+		return fail(e)
 	}
-	tmp := filepath.Join(dir, manifestName+".tmp")
-	if e := os.WriteFile(tmp, b, 0600); e != nil {
-		return dir, m, e
-	}
-	if e := os.Rename(tmp, filepath.Join(dir, manifestName)); e != nil {
-		return dir, m, e
-	}
-	os.WriteFile(filepath.Join(dir, "README-RESTORE.txt"), []byte(restoreHelp(dir)), 0600)
-	return dir, m, nil
+	return sink.path(), m, nil
 }
 
 func restoreHelp(dir string) string {
 	return `Claude session backup (` + backupFormat + `)
+A .tar.gz backup unpacks to the same layout (tar -xzf <file>).
 
 files/desktop/  -> Claude Desktop userData root
                    macOS:   ~/Library/Application Support/Claude
@@ -253,11 +302,18 @@ This backup contains private chat history. Do not upload it.
 }
 
 func loadManifest(dir string) (BackupManifest, error) {
-	var m BackupManifest
+	if isArchive(dir) {
+		return readArchiveManifest(dir)
+	}
 	b, e := os.ReadFile(filepath.Join(dir, manifestName))
 	if e != nil {
-		return m, fmt.Errorf("not a complete backup (no %s): %w", manifestName, e)
+		return BackupManifest{}, fmt.Errorf("not a complete backup (no %s): %w", manifestName, e)
 	}
+	return parseManifest(b)
+}
+
+func parseManifest(b []byte) (BackupManifest, error) {
+	var m BackupManifest
 	if e := json.Unmarshal(b, &m); e != nil {
 		return m, e
 	}
@@ -277,6 +333,10 @@ func verifyBackup(dir string) (BackupManifest, []string, error) {
 	m, e := loadManifest(dir)
 	if e != nil {
 		return m, nil, e
+	}
+	if isArchive(dir) {
+		bad, e := scanArchive(dir, m, "")
+		return m, bad, e
 	}
 	bad := []string{}
 	for _, f := range m.Files {
@@ -310,7 +370,24 @@ type RestoreReport struct {
 // version is first saved inside the backup directory.
 func restoreBackup(dir string, targets map[string]string, apply, overwrite bool, now time.Time) (RestoreReport, error) {
 	rep := RestoreReport{Backup: dir, Apply: apply, Overwrite: overwrite, Roots: targets, Create: []string{}, Conflicts: []string{}}
-	m, bad, e := verifyBackup(dir)
+	stamp := now.Format("20060102-150405")
+	content, saved := dir, filepath.Join(dir, "replaced-"+stamp)
+	var m BackupManifest
+	var bad []string
+	var e error
+	if isArchive(dir) && apply {
+		// Unpack once (verifying every checksum) and restore from the copy.
+		saved = strings.TrimSuffix(dir, archiveExt) + "-replaced-" + stamp
+		if m, e = readArchiveManifest(dir); e != nil {
+			return rep, e
+		}
+		content, bad, e = extractArchive(dir, m)
+		if content != "" {
+			defer os.RemoveAll(content)
+		}
+	} else {
+		m, bad, e = verifyBackup(dir)
+	}
 	if e != nil {
 		return rep, e
 	}
@@ -398,7 +475,6 @@ func restoreBackup(dir string, targets map[string]string, apply, overwrite bool,
 	if !apply {
 		return rep, nil
 	}
-	saved := filepath.Join(dir, "replaced-"+now.Format("20060102-150405"))
 	for _, j := range jobs {
 		r := opened[j.f.Role]
 		rel := filepath.FromSlash(j.f.Path)
@@ -425,7 +501,7 @@ func restoreBackup(dir string, targets map[string]string, apply, overwrite bool,
 				return rep, e
 			}
 		}
-		b, e := os.ReadFile(filepath.Join(dir, backupFilesDir, j.f.Role, rel))
+		b, e := os.ReadFile(filepath.Join(content, backupFilesDir, j.f.Role, rel))
 		if e != nil {
 			return rep, e
 		}
@@ -461,7 +537,10 @@ type BackupSummary struct {
 	Sessions int    `json:"desktop_session_records"`
 	Chats    int    `json:"transcripts"`
 	Complete bool   `json:"complete"`
+	Archive  int64  `json:"archive_bytes,omitempty"`
 }
+
+var backupName = regexp.MustCompile(`^claude-backup-[0-9]{8}-[0-9]{6}(\.tar\.gz)?(\.partial)?$`)
 
 func listBackups(dest string) ([]BackupSummary, error) {
 	entries, e := os.ReadDir(dest)
@@ -470,17 +549,22 @@ func listBackups(dest string) ([]BackupSummary, error) {
 	}
 	out := []BackupSummary{}
 	for _, d := range entries {
-		if !d.IsDir() || !strings.HasPrefix(d.Name(), backupPrefix) {
+		if !backupName.MatchString(d.Name()) {
 			continue
 		}
 		p := filepath.Join(dest, d.Name())
 		s := BackupSummary{Path: p}
-		if m, e := loadManifest(p); e == nil {
-			s = BackupSummary{Path: p, Created: m.Created, OS: m.OS, Host: m.Host, Files: len(m.Files), Bytes: m.Bytes, Sessions: m.Sessions, Chats: m.Chats, Complete: true}
+		if !strings.HasSuffix(p, ".partial") {
+			if m, e := loadManifest(p); e == nil {
+				s = BackupSummary{Path: p, Created: m.Created, OS: m.OS, Host: m.Host, Files: len(m.Files), Bytes: m.Bytes, Sessions: m.Sessions, Chats: m.Chats, Complete: true}
+			}
+		}
+		if i, e := os.Stat(p); e == nil && i.Mode().IsRegular() {
+			s.Archive = i.Size()
 		}
 		out = append(out, s)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path > out[j].Path })
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
 }
 
@@ -498,7 +582,7 @@ func humanBytes(n int64) string {
 func runBackupCommand(cmd string, args []string) error {
 	f := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	dest := f.String("dest", "", "folder that holds timestamped backups")
-	from := f.String("from", "", "backup directory (claude-backup-YYYYMMDD-HHMMSS)")
+	from := f.String("from", "", "backup file or folder (claude-backup-YYYYMMDD-HHMMSS[.tar.gz])")
 	data := f.String("data-dir", "", "Claude Desktop userData root")
 	home := f.String("claude-home", "", "Claude Code home (default ~/.claude)")
 	withConfig := f.Bool("with-config", false, "backup: also include ~/.claude settings.json, CLAUDE.md, rules, skills, agents, commands")
@@ -507,6 +591,7 @@ func runBackupCommand(cmd string, args []string) error {
 	offline := f.Bool("offline", false, "restore: confirm Claude Desktop and Claude Code are fully quit")
 	overwrite := f.Bool("overwrite", false, "restore: replace differing files; current versions are saved in the backup first")
 	summary := f.Bool("summary", false, "print counts instead of file lists")
+	format := f.String("format", "tar.gz", "backup: tar.gz (one compressed file) or dir (plain folder)")
 	if e := f.Parse(args); e != nil {
 		return e
 	}
@@ -542,7 +627,10 @@ func runBackupCommand(cmd string, args []string) error {
 		if guard() != nil {
 			fmt.Fprintln(os.Stderr, "Note: Claude is running. Backup continues; files written after this moment are not included.")
 		}
-		dir, m, e := createBackup(*dest, roots, *withConfig, time.Now())
+		if *format != "tar.gz" && *format != "dir" {
+			return errors.New("--format must be tar.gz or dir")
+		}
+		dir, m, e := createBackup(*dest, roots, *withConfig, time.Now(), *format == "tar.gz")
 		if e != nil {
 			if dir != "" {
 				fmt.Fprintln(os.Stderr, "Incomplete backup left at:", dir)
@@ -550,6 +638,9 @@ func runBackupCommand(cmd string, args []string) error {
 			return e
 		}
 		fmt.Printf("Backup complete: %s\nFiles: %d (%s). Desktop session records: %d. Transcripts: %d. Skipped: %d.\n", dir, len(m.Files), humanBytes(m.Bytes), m.Sessions, m.Chats, len(m.Skipped))
+		if i, e := os.Stat(dir); e == nil && i.Mode().IsRegular() {
+			fmt.Printf("Archive size: %s\n", humanBytes(i.Size()))
+		}
 		for _, s := range m.Skipped {
 			fmt.Println("Skipped:", s)
 		}
@@ -571,7 +662,11 @@ func runBackupCommand(cmd string, args []string) error {
 				fmt.Printf("%s  INCOMPLETE (no manifest)\n", b.Path)
 				continue
 			}
-			fmt.Printf("%s  %s  %s/%s  files=%d size=%s sessions=%d transcripts=%d\n", b.Path, b.Created, b.OS, b.Host, b.Files, humanBytes(b.Bytes), b.Sessions, b.Chats)
+			extra := ""
+			if b.Archive > 0 {
+				extra = " compressed=" + humanBytes(b.Archive)
+			}
+			fmt.Printf("%s  %s  %s/%s  files=%d size=%s%s sessions=%d transcripts=%d\n", b.Path, b.Created, b.OS, b.Host, b.Files, humanBytes(b.Bytes), extra, b.Sessions, b.Chats)
 		}
 		return nil
 	case "verify":

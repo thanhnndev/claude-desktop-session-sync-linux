@@ -33,38 +33,39 @@ A command-line tool for **local sessions created in the Code tab of Claude Deskt
 
 ## Session backup and restore (Linux, macOS, Windows)
 
-`sync` backups only hold the records a sync changes. To keep **all** chat history — before reinstalling the OS, moving to a new disk or machine — use `backup`. It only reads Claude data and writes a new, timestamped folder:
+`sync` backups only hold the records a sync changes. To keep **all** chat history — before reinstalling the OS, moving to a new disk or machine — use `backup`. It only reads Claude data and writes **one compressed file** `claude-backup-YYYYMMDD-HHMMSS.tar.gz` (about a third of the original size):
 
 ```bash
 claude-session-sync backup --dest /Volumes/Work          # macOS external/second volume
 claude-session-sync backup --dest ~/backups              # any existing folder
+claude-session-sync backup --dest ~/backups --format dir # plain folder instead of .tar.gz
 claude-session-sync backups --dest /Volumes/Work         # list backups
-claude-session-sync verify --from /Volumes/Work/claude-backup-20261107-093300
+claude-session-sync verify --from /Volumes/Work/claude-backup-20261107-094233.tar.gz
 ```
 
-Each backup is `claude-backup-YYYYMMDD-HHMMSS/` with `manifest.json` (size, mode, mtime and SHA-256 of every file), `README-RESTORE.txt` and plain copies under `files/`:
+The archive is a standard gzip tar (`tar -tzf` / `tar -xzf` work without this tool). It is written as `.tar.gz.partial` and renamed only when complete. Inside (or in the folder for `--format dir`) are `manifest.json` (size, mode, mtime and SHA-256 of every file), `README-RESTORE.txt` and plain copies under `files/`:
 
 | Folder in backup | Restored to | Contents |
 |---|---|---|
 | `files/desktop/` | Desktop userData (macOS `~/Library/Application Support/Claude`, Linux `~/.config/Claude`, Windows `%APPDATA%\Claude`) | `claude-code-sessions/`, `ccd-session-presets.json`, `ccd-ids.json`, `git-worktrees.json`, `local-agent-mode-sessions/`, `side-session-notes/`, `scratch-workspaces/` |
 | `files/claude/` | `~/.claude` | `projects/` (transcripts), `history.jsonl`, `sessions/`, `file-history/`, `todos/`, `plans/` |
 
-Never included: cookies, Local Storage, caches, Desktop `config.json`, `~/.claude/.credentials.json`, keychain entries. `--with-config` additionally saves `settings.json`, `CLAUDE.md`, `rules/`, `skills/`, `agents/` and `commands/` from `~/.claude`. Symlinks are recorded as skipped, not followed. Files are copied once and hashed while copying, so a backup taken while Claude is running is self-consistent; messages written afterwards are not included. The manifest is written last — a folder without it is incomplete. Folders are `0700`, files `0600`. The backup contains private conversations: do not upload it.
+Never included: cookies, Local Storage, caches, Desktop `config.json`, `~/.claude/.credentials.json`, keychain entries. `--with-config` additionally saves `settings.json`, `CLAUDE.md`, `rules/`, `skills/`, `agents/` and `commands/` from `~/.claude`. Symlinks are recorded as skipped, not followed. Each file is copied once, up to the size it had when listed, and hashed while copying, so a backup taken while Claude is running is self-consistent; messages written afterwards are not included. The manifest is written last — a folder without it, or a `.partial` file, is incomplete. Archives and files are `0600`, folders `0700`. The backup contains private conversations: do not upload it.
 
 Restore (for example after a fresh macOS install, once Claude Desktop has been opened, signed in to the same account and quit with Cmd+Q):
 
 ```bash
-claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --summary
-claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --apply --offline --summary
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-094233.tar.gz --summary
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-094233.tar.gz --apply --offline --summary
 ```
 
 - Without `--apply --offline` restore is a dry run. Apply refuses while Claude processes are running.
-- Every backup file is checksum-verified first; any mismatch aborts before writing.
+- Every backup file is checksum-verified first; any mismatch aborts before writing. An archive is unpacked once into a temporary `.claude-restore-*` folder next to it (not the system temp volume) and removed afterwards.
 - Missing files are created (atomic rename, original mode and mtime). Identical files are skipped.
-- Files that exist with different content are **conflicts** and are left untouched. `--overwrite` replaces them, saving each current version first under `<backup>/replaced-<timestamp>/`.
+- Files that exist with different content are **conflicts** and are left untouched. `--overwrite` replaces them, saving each current version first under `<backup>/replaced-<timestamp>/` (for an archive: `claude-backup-…-replaced-<timestamp>/` next to it).
 - `--only desktop` or `--only claude` restores one side; `--data-dir` and `--claude-home` pick other targets.
 
-Sessions reappear in **Code → Local** when the account/org IDs match (same account) and the session folders exist at the same paths. A backup restored on another OS keeps its original paths; it is not converted. Without this tool, `rsync -a --ignore-existing files/desktop/ <userData>/` and the same for `files/claude/ ~/.claude/` give the same result as a non-overwriting restore.
+Sessions reappear in **Code → Local** when the account/org IDs match (same account) and the session folders exist at the same paths. A backup restored on another OS keeps its original paths; it is not converted. Without this tool, unpack with `tar -xzf`, then `rsync -a --ignore-existing files/desktop/ <userData>/` and the same for `files/claude/ ~/.claude/` give the same result as a non-overwriting restore.
 
 ## Copy modes
 

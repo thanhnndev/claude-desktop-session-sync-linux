@@ -99,7 +99,7 @@ func interactiveMenu(in *bufio.Reader, out io.Writer, execute func([]string) err
 		case "6", "7":
 			prompt, flag, cmd := "Backup destination folder: ", "--dest", "backup"
 			if choice == "7" {
-				prompt, flag, cmd = "Backup folder (claude-backup-...): ", "--from", "restore"
+				prompt, flag, cmd = "Backup file or folder (claude-backup-...): ", "--from", "restore"
 			}
 			fmt.Fprint(out, prompt)
 			p, e := readChoice(in)

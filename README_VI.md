@@ -33,37 +33,38 @@ Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude De
 
 ## Backup và khôi phục toàn bộ session (Linux, macOS, Windows)
 
-Backup của `sync` chỉ chứa bản ghi mà sync thay đổi. Để giữ **toàn bộ** lịch sử chat trước khi cài lại hệ điều hành, đổi ổ hoặc đổi máy, dùng `backup`. Lệnh này chỉ đọc dữ liệu Claude và tạo một thư mục mới có timestamp:
+Backup của `sync` chỉ chứa bản ghi mà sync thay đổi. Để giữ **toàn bộ** lịch sử chat trước khi cài lại hệ điều hành, đổi ổ hoặc đổi máy, dùng `backup`. Lệnh này chỉ đọc dữ liệu Claude và tạo **một file nén** `claude-backup-YYYYMMDD-HHMMSS.tar.gz` (khoảng 1/3 dung lượng gốc):
 
 ```bash
 claude-session-sync backup --dest /Volumes/Work
+claude-session-sync backup --dest ~/backups --format dir # thư mục thường thay vì .tar.gz
 claude-session-sync backups --dest /Volumes/Work         # liệt kê
-claude-session-sync verify --from /Volumes/Work/claude-backup-20261107-093300
+claude-session-sync verify --from /Volumes/Work/claude-backup-20261107-094233.tar.gz
 ```
 
-Mỗi backup là `claude-backup-YYYYMMDD-HHMMSS/` gồm `manifest.json` (kích thước, quyền, mtime, SHA-256 từng file), `README-RESTORE.txt` và bản sao thường trong `files/`:
+File nén là tar gzip chuẩn (`tar -tzf` / `tar -xzf` dùng được mà không cần công cụ này), được ghi dưới tên `.tar.gz.partial` và chỉ đổi tên khi hoàn tất. Bên trong (hoặc trong thư mục nếu dùng `--format dir`) gồm `manifest.json` (kích thước, quyền, mtime, SHA-256 từng file), `README-RESTORE.txt` và bản sao thường trong `files/`:
 
 | Thư mục | Khôi phục vào | Nội dung |
 |---|---|---|
 | `files/desktop/` | userData của Desktop (macOS `~/Library/Application Support/Claude`, Linux `~/.config/Claude`, Windows `%APPDATA%\Claude`) | `claude-code-sessions/`, `ccd-session-presets.json`, `ccd-ids.json`, `git-worktrees.json`, `local-agent-mode-sessions/`, `side-session-notes/`, `scratch-workspaces/` |
 | `files/claude/` | `~/.claude` | `projects/` (transcript), `history.jsonl`, `sessions/`, `file-history/`, `todos/`, `plans/` |
 
-Không bao giờ chứa: cookie, Local Storage, cache, `config.json` của Desktop, `~/.claude/.credentials.json`, keychain. `--with-config` lưu thêm `settings.json`, `CLAUDE.md`, `rules/`, `skills/`, `agents/`, `commands/`. Symlink không được đi theo. Mỗi file được băm ngay khi chép nên backup lúc Claude đang chạy vẫn nhất quán; tin nhắn ghi sau thời điểm đó không có trong backup. `manifest.json` được ghi cuối cùng — thiếu nó nghĩa là backup chưa xong. Backup chứa hội thoại riêng tư: đừng upload.
+Không bao giờ chứa: cookie, Local Storage, cache, `config.json` của Desktop, `~/.claude/.credentials.json`, keychain. `--with-config` lưu thêm `settings.json`, `CLAUDE.md`, `rules/`, `skills/`, `agents/`, `commands/`. Symlink không được đi theo. Mỗi file được băm ngay khi chép nên backup lúc Claude đang chạy vẫn nhất quán; tin nhắn ghi sau thời điểm đó không có trong backup. `manifest.json` được ghi cuối cùng — thiếu nó, hoặc còn đuôi `.partial`, nghĩa là backup chưa xong. Backup chứa hội thoại riêng tư: đừng upload.
 
 Khôi phục (ví dụ sau khi cài mới macOS: mở Claude Desktop, đăng nhập cùng account, rồi Cmd+Q):
 
 ```bash
-claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --summary
-claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --apply --offline --summary
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-094233.tar.gz --summary
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-094233.tar.gz --apply --offline --summary
 ```
 
 - Không có `--apply --offline` thì chỉ chạy thử. Khi apply, công cụ từ chối nếu Claude còn chạy.
-- Mọi file trong backup được kiểm checksum trước; sai một file là dừng, không ghi gì.
+- Mọi file trong backup được kiểm checksum trước; sai một file là dừng, không ghi gì. File nén được giải nén một lần vào thư mục tạm `.claude-restore-*` ngay cạnh nó (không dùng ổ hệ thống) và xoá sau khi xong.
 - File thiếu được tạo mới (rename nguyên tử, giữ quyền và mtime). File giống hệt thì bỏ qua.
-- File đã tồn tại nhưng khác nội dung là **xung đột** và được giữ nguyên. `--overwrite` sẽ thay thế, sau khi lưu bản hiện tại vào `<backup>/replaced-<timestamp>/`.
+- File đã tồn tại nhưng khác nội dung là **xung đột** và được giữ nguyên. `--overwrite` sẽ thay thế, sau khi lưu bản hiện tại vào `<backup>/replaced-<timestamp>/` (với file nén: `claude-backup-…-replaced-<timestamp>/` cạnh file).
 - `--only desktop` hoặc `--only claude` để khôi phục một phía; `--data-dir`, `--claude-home` để chọn đích khác.
 
-Session hiện lại trong **Code → Local** khi account/org ID trùng (cùng account) và thư mục làm việc vẫn ở đường dẫn cũ. Backup khôi phục sang hệ điều hành khác giữ nguyên đường dẫn gốc, không chuyển đổi. Không có công cụ này thì `rsync -a --ignore-existing files/desktop/ <userData>/` và tương tự cho `files/claude/ ~/.claude/` cho kết quả như restore không ghi đè.
+Session hiện lại trong **Code → Local** khi account/org ID trùng (cùng account) và thư mục làm việc vẫn ở đường dẫn cũ. Backup khôi phục sang hệ điều hành khác giữ nguyên đường dẫn gốc, không chuyển đổi. Không có công cụ này thì giải nén bằng `tar -xzf`, rồi `rsync -a --ignore-existing files/desktop/ <userData>/` và tương tự cho `files/claude/ ~/.claude/` cho kết quả như restore không ghi đè.
 
 ## Hai lựa chọn sao chép
 

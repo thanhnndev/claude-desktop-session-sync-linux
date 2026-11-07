@@ -2,6 +2,13 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.6.1] — 2026-11-07
+
+- `backup` now writes a single `claude-backup-YYYYMMDD-HHMMSS.tar.gz` by default (standard gzip tar, about 3x smaller); `--format dir` keeps the folder layout. Archives are written as `.partial` and renamed when complete.
+- `verify`, `restore` and `backups` accept archives. Restore unpacks a verified copy next to the archive and saves replaced versions beside it.
+- Each file is captured up to the size seen when listed, so transcripts that grow during a backup stay consistent with the manifest.
+- `backups` ignores folders that are not tool backups and reports `.partial` archives as incomplete.
+
 ## [0.6.0] — 2026-11-07
 
 - Add native macOS support: discover `~/Library/Application Support/Claude`, detect Claude.app and bundled Claude Code processes via sysctl, flock locking, and accept the `/var` `/tmp` `/etc` system aliases under `/private`.

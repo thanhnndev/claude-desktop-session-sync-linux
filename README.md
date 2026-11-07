@@ -1,8 +1,27 @@
-# Claude Desktop Session Sync — Linux
+# Claude Desktop Toolkit — session sync and backup (Linux, macOS, Windows)
 
 ## Windows support
 
 Version 0.4.0 also builds and runs natively on Windows amd64. See [Windows installation, discovery, safety and validation](docs/WINDOWS.md). Windows-created WSL session records retain their distro and Linux paths; transcripts must be proven in the Windows Desktop projects store. Source trees are not copied or converted.
+
+## macOS support
+
+Version 0.6.0 builds and runs natively on macOS (amd64 and arm64; verified on macOS 26 x86_64). Paths observed on a real Mac:
+
+```text
+~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_<id>.json
+~/Library/Application Support/Claude/ccd-session-presets.json
+~/.claude/projects/<project>/<cli-session-id>.jsonl
+```
+
+`doctor`, `plan`, `sync` and `undo` work the same as on Linux. The write guard detects `/Applications/Claude.app` (main app and helpers) and the Claude Code binary bundled under `~/Library/Application Support/Claude/claude-code/`, using `sysctl` (no `ps` parsing, no cgo). Quit Claude with **Cmd+Q** — closing the window leaves it running. Build without Go installed system-wide, for example with mise:
+
+```bash
+mise install go@1.25
+mise exec go@1.25 -- go build -trimpath -o claude-session-sync .
+```
+
+On macOS the binary is unsigned; if Gatekeeper blocks a downloaded copy, run `xattr -d com.apple.quarantine claude-session-sync`.
 
 **English** | [Tiếng Việt](README_VI.md)
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
@@ -11,6 +30,41 @@ Version 0.4.0 also builds and runs natively on Windows amd64. See [Windows insta
 A command-line tool for **local sessions created in the Code tab of Claude Desktop**, with CachyOS/Arch as the primary target. It synchronizes sidebar records in both directions between accounts and organizations on **the same machine, under the same Linux user**. Transcripts are already shared locally, so switching to the CLI is not required to continue working.
 
 **Version 0.3.2 status:** paths, schemas, transcripts and dry-run behavior were checked on CachyOS with `claude-desktop 3.6556.2-1`; writes, backups and undo were tested with fixtures. **Reopening and continuing a session in Desktop after switching accounts has not been verified.** This release is not a certification of UI compatibility. See the [verification report](docs/VERIFICATION.md).
+
+## Session backup and restore (Linux, macOS, Windows)
+
+`sync` backups only hold the records a sync changes. To keep **all** chat history — before reinstalling the OS, moving to a new disk or machine — use `backup`. It only reads Claude data and writes a new, timestamped folder:
+
+```bash
+claude-session-sync backup --dest /Volumes/Work          # macOS external/second volume
+claude-session-sync backup --dest ~/backups              # any existing folder
+claude-session-sync backups --dest /Volumes/Work         # list backups
+claude-session-sync verify --from /Volumes/Work/claude-backup-20261107-093300
+```
+
+Each backup is `claude-backup-YYYYMMDD-HHMMSS/` with `manifest.json` (size, mode, mtime and SHA-256 of every file), `README-RESTORE.txt` and plain copies under `files/`:
+
+| Folder in backup | Restored to | Contents |
+|---|---|---|
+| `files/desktop/` | Desktop userData (macOS `~/Library/Application Support/Claude`, Linux `~/.config/Claude`, Windows `%APPDATA%\Claude`) | `claude-code-sessions/`, `ccd-session-presets.json`, `ccd-ids.json`, `git-worktrees.json`, `local-agent-mode-sessions/`, `side-session-notes/`, `scratch-workspaces/` |
+| `files/claude/` | `~/.claude` | `projects/` (transcripts), `history.jsonl`, `sessions/`, `file-history/`, `todos/`, `plans/` |
+
+Never included: cookies, Local Storage, caches, Desktop `config.json`, `~/.claude/.credentials.json`, keychain entries. `--with-config` additionally saves `settings.json`, `CLAUDE.md`, `rules/`, `skills/`, `agents/` and `commands/` from `~/.claude`. Symlinks are recorded as skipped, not followed. Files are copied once and hashed while copying, so a backup taken while Claude is running is self-consistent; messages written afterwards are not included. The manifest is written last — a folder without it is incomplete. Folders are `0700`, files `0600`. The backup contains private conversations: do not upload it.
+
+Restore (for example after a fresh macOS install, once Claude Desktop has been opened, signed in to the same account and quit with Cmd+Q):
+
+```bash
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --summary
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --apply --offline --summary
+```
+
+- Without `--apply --offline` restore is a dry run. Apply refuses while Claude processes are running.
+- Every backup file is checksum-verified first; any mismatch aborts before writing.
+- Missing files are created (atomic rename, original mode and mtime). Identical files are skipped.
+- Files that exist with different content are **conflicts** and are left untouched. `--overwrite` replaces them, saving each current version first under `<backup>/replaced-<timestamp>/`.
+- `--only desktop` or `--only claude` restores one side; `--data-dir` and `--claude-home` pick other targets.
+
+Sessions reappear in **Code → Local** when the account/org IDs match (same account) and the session folders exist at the same paths. A backup restored on another OS keeps its original paths; it is not converted. Without this tool, `rsync -a --ignore-existing files/desktop/ <userData>/` and the same for `files/claude/ ~/.claude/` give the same result as a non-overwriting restore.
 
 ## Copy modes
 
@@ -119,7 +173,7 @@ The following paths were observed on the CachyOS machine used for verification:
 claude-session-sync doctor --data-dir /verified/path/to/userData --projects-dir /verified/path/to/projects --summary
 ```
 
-Other commands accept the same two options. Flatpak, Wine, Windows, macOS, SSH and WSL layouts are not converted automatically.
+Other commands accept the same two options. On macOS the default root is `~/Library/Application Support/Claude`. Flatpak, Wine, SSH and cross-OS layouts are not converted automatically.
 
 ## Bidirectional synchronization, messages and deletions
 

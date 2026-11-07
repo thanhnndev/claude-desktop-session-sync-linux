@@ -2,6 +2,12 @@
 
 Changes to Claude Desktop Session Sync for Linux, newest first. Dates use Asia/Saigon. The tool targets local sessions created in the **Claude Desktop Code tab** on the same machine and Linux user.
 
+## [0.6.0] — 2026-11-07
+
+- Add native macOS support: discover `~/Library/Application Support/Claude`, detect Claude.app and bundled Claude Code processes via sysctl, flock locking, and accept the `/var` `/tmp` `/etc` system aliases under `/private`.
+- Add `backup`, `backups`, `verify` and `restore`: full timestamped, checksummed backups of Desktop Code session records, saved projects, Cowork sessions and `~/.claude` transcripts/history, excluding cookies and credentials. Restore is a dry run by default, verifies every checksum, never overwrites differing files without `--overwrite`, and saves replaced versions.
+- Interactive menu: options to back up and to preview a restore.
+
 ## [0.5.0] — 2026-11-02
 
 - Synchronize saved Code projects in all mode, preserving local/WSL folder targets, names and complete settings across existing accounts. Merge newest preset versions and report unresolved conflicts without overwriting unrelated account metadata.

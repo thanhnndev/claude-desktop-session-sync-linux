@@ -1,8 +1,27 @@
-# Claude Desktop Session Sync — Linux
+# Claude Desktop Toolkit — session sync and backup (Linux, macOS, Windows)
 
 ## Hỗ trợ Windows
 
 Bản 0.4.0 chạy native trên Windows amd64. Xem [hướng dẫn cài đặt và kiểm chứng Windows](docs/WINDOWS.md). Giữ nguyên distro và đường dẫn Linux của session WSL tạo bởi Windows Desktop; transcript phải được chứng minh trong kho Desktop trên Windows. Chế độ `all` đồng bộ cả dự án đã lưu trong `ccd-session-presets.json`, gồm thư mục và cấu hình đầy đủ.
+
+## Hỗ trợ macOS
+
+Bản 0.6.0 chạy native trên macOS (amd64 và arm64; đã kiểm tra trên macOS 26 x86_64). Đường dẫn quan sát trên máy Mac thật:
+
+```text
+~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_<id>.json
+~/Library/Application Support/Claude/ccd-session-presets.json
+~/.claude/projects/<project>/<cli-session-id>.jsonl
+```
+
+`doctor`, `plan`, `sync`, `undo` hoạt động như trên Linux. Bộ chặn ghi nhận diện `/Applications/Claude.app` (app chính và helper) và Claude Code đi kèm trong `~/Library/Application Support/Claude/claude-code/` bằng `sysctl`. Thoát Claude bằng **Cmd+Q** — đóng cửa sổ thì app vẫn chạy. Build bằng mise nếu chưa cài Go:
+
+```bash
+mise install go@1.25
+mise exec go@1.25 -- go build -trimpath -o claude-session-sync .
+```
+
+Binary chưa ký; nếu Gatekeeper chặn bản tải về: `xattr -d com.apple.quarantine claude-session-sync`.
 
 [English](README.md) | **Tiếng Việt**
 [Lịch sử thay đổi](CHANGELOG.md) · [Các bản phát hành](https://github.com/thanhnndev/claude-desktop-session-sync-linux/releases)
@@ -11,6 +30,40 @@ Bản 0.4.0 chạy native trên Windows amd64. Xem [hướng dẫn cài đặt v
 Công cụ dòng lệnh cho **session local tạo trong tab Code của Claude Desktop**, ưu tiên CachyOS/Arch. Đồng bộ hai chiều các bản ghi sidebar giữa các account và organization trên **cùng máy, cùng Linux user**. Transcript vốn dùng chung nên không cần chuyển sang CLI để làm tiếp.
 
 **Trạng thái 0.3.2:** đã kiểm tra đường dẫn, schema, transcript và dry-run trên CachyOS với `claude-desktop 3.6556.2-1`; đã kiểm thử ghi/backup/undo trên dữ liệu thử. **Chưa kiểm chứng mở lại/tiếp tục session trong Desktop sau khi đổi account.** Không xem đây là bản đã được chứng nhận tương thích UI. Xem [báo cáo xác minh](docs/VERIFICATION.md).
+
+## Backup và khôi phục toàn bộ session (Linux, macOS, Windows)
+
+Backup của `sync` chỉ chứa bản ghi mà sync thay đổi. Để giữ **toàn bộ** lịch sử chat trước khi cài lại hệ điều hành, đổi ổ hoặc đổi máy, dùng `backup`. Lệnh này chỉ đọc dữ liệu Claude và tạo một thư mục mới có timestamp:
+
+```bash
+claude-session-sync backup --dest /Volumes/Work
+claude-session-sync backups --dest /Volumes/Work         # liệt kê
+claude-session-sync verify --from /Volumes/Work/claude-backup-20261107-093300
+```
+
+Mỗi backup là `claude-backup-YYYYMMDD-HHMMSS/` gồm `manifest.json` (kích thước, quyền, mtime, SHA-256 từng file), `README-RESTORE.txt` và bản sao thường trong `files/`:
+
+| Thư mục | Khôi phục vào | Nội dung |
+|---|---|---|
+| `files/desktop/` | userData của Desktop (macOS `~/Library/Application Support/Claude`, Linux `~/.config/Claude`, Windows `%APPDATA%\Claude`) | `claude-code-sessions/`, `ccd-session-presets.json`, `ccd-ids.json`, `git-worktrees.json`, `local-agent-mode-sessions/`, `side-session-notes/`, `scratch-workspaces/` |
+| `files/claude/` | `~/.claude` | `projects/` (transcript), `history.jsonl`, `sessions/`, `file-history/`, `todos/`, `plans/` |
+
+Không bao giờ chứa: cookie, Local Storage, cache, `config.json` của Desktop, `~/.claude/.credentials.json`, keychain. `--with-config` lưu thêm `settings.json`, `CLAUDE.md`, `rules/`, `skills/`, `agents/`, `commands/`. Symlink không được đi theo. Mỗi file được băm ngay khi chép nên backup lúc Claude đang chạy vẫn nhất quán; tin nhắn ghi sau thời điểm đó không có trong backup. `manifest.json` được ghi cuối cùng — thiếu nó nghĩa là backup chưa xong. Backup chứa hội thoại riêng tư: đừng upload.
+
+Khôi phục (ví dụ sau khi cài mới macOS: mở Claude Desktop, đăng nhập cùng account, rồi Cmd+Q):
+
+```bash
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --summary
+claude-session-sync restore --from /Volumes/Work/claude-backup-20261107-093300 --apply --offline --summary
+```
+
+- Không có `--apply --offline` thì chỉ chạy thử. Khi apply, công cụ từ chối nếu Claude còn chạy.
+- Mọi file trong backup được kiểm checksum trước; sai một file là dừng, không ghi gì.
+- File thiếu được tạo mới (rename nguyên tử, giữ quyền và mtime). File giống hệt thì bỏ qua.
+- File đã tồn tại nhưng khác nội dung là **xung đột** và được giữ nguyên. `--overwrite` sẽ thay thế, sau khi lưu bản hiện tại vào `<backup>/replaced-<timestamp>/`.
+- `--only desktop` hoặc `--only claude` để khôi phục một phía; `--data-dir`, `--claude-home` để chọn đích khác.
+
+Session hiện lại trong **Code → Local** khi account/org ID trùng (cùng account) và thư mục làm việc vẫn ở đường dẫn cũ. Backup khôi phục sang hệ điều hành khác giữ nguyên đường dẫn gốc, không chuyển đổi. Không có công cụ này thì `rsync -a --ignore-existing files/desktop/ <userData>/` và tương tự cho `files/claude/ ~/.claude/` cho kết quả như restore không ghi đè.
 
 ## Hai lựa chọn sao chép
 

@@ -1,4 +1,4 @@
-//go:build linux || windows
+//go:build linux || windows || darwin
 
 package main
 
@@ -68,6 +68,8 @@ func interactiveMenu(in *bufio.Reader, out io.Writer, execute func([]string) err
 		fmt.Fprintln(out, "[3] Preview synchronization — chat history only")
 		fmt.Fprintln(out, "[4] Back up and synchronize — chat history only")
 		fmt.Fprintln(out, "[5] Undo a synchronization backup")
+		fmt.Fprintln(out, "[6] Back up all sessions and transcripts to a folder")
+		fmt.Fprintln(out, "[7] Preview restoring a session backup")
 		fmt.Fprintln(out, "[Q] Quit")
 		fmt.Fprint(out, "Choose an option: ")
 		choice, e := readChoice(in)
@@ -94,6 +96,20 @@ func interactiveMenu(in *bufio.Reader, out io.Writer, execute func([]string) err
 				return e
 			}
 			args = []string{"undo", "--backup", id, "--apply", "--offline", "--interactive"}
+		case "6", "7":
+			prompt, flag, cmd := "Backup destination folder: ", "--dest", "backup"
+			if choice == "7" {
+				prompt, flag, cmd = "Backup folder (claude-backup-...): ", "--from", "restore"
+			}
+			fmt.Fprint(out, prompt)
+			p, e := readChoice(in)
+			if e != nil {
+				return e
+			}
+			args = []string{cmd, flag, p}
+			if cmd == "restore" {
+				args = append(args, "--summary")
+			}
 		case "q", "quit":
 			return nil
 		default:
